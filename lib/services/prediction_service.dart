@@ -16,8 +16,9 @@ class PredictionResponse {
 
   factory PredictionResponse.fromJson(Map<String, dynamic> json) {
     return PredictionResponse(
-      totalPredictedSpending: json['total_predicted_spending'] as double,
-      averageDailySpending: json['average_daily_spending'] as double,
+      totalPredictedSpending:
+          (json['total_predicted_spending'] as num).toDouble(),
+      averageDailySpending: (json['average_daily_spending'] as num).toDouble(),
       dailyPredictions: (json['daily_predictions'] as List)
           .map((prediction) => DailyPrediction.fromJson(prediction))
           .toList(),
@@ -37,7 +38,7 @@ class DailyPrediction {
   factory DailyPrediction.fromJson(Map<String, dynamic> json) {
     return DailyPrediction(
       date: DateTime.parse(json['date']),
-      predictedAmount: json['predicted_amount'] as double,
+      predictedAmount: (json['predicted_amount'] as num).toDouble(),
     );
   }
 }

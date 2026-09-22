@@ -293,6 +293,18 @@ class _GroupsScreenState extends State<GroupsScreen>
                           ),
                         );
                       } else if (itemType == 'friend') {
+                        final friendId = item['id'].toString();
+                        final isCustom = item['is_custom'] == true;
+                        final isLinked = item['linked_user_id'] != null;
+                        final balance = friendProvider.friendBalances[friendId] ??
+                            {'youOwe': 0.0, 'youAreOwed': 0.0};
+                        final youGet = balance['youAreOwed'] ?? 0.0;
+                        final youOwe = balance['youOwe'] ?? 0.0;
+                        final netBalance = youGet - youOwe;
+                        final displayName = item['full_name'] ??
+                            item['username'] ??
+                            'Unknown';
+
                         return Card(
                           margin: const EdgeInsets.symmetric(
                               horizontal: 16, vertical: 4),
@@ -300,48 +312,85 @@ class _GroupsScreenState extends State<GroupsScreen>
                             leading: CircleAvatar(
                               backgroundColor:
                                   primaryColor.withAlpha((0.8 * 255).round()),
-                              child: Icon(Icons.person, color: onPrimaryColor),
-                              // backgroundImage: item['avatar_url'] != null ? NetworkImage(item['avatar_url']) : null,
+                              child: Icon(
+                                isCustom && !isLinked
+                                    ? Icons.person_outline
+                                    : Icons.person,
+                                color: onPrimaryColor,
+                              ),
                             ),
-                            title: Text(item['full_name'] ??
-                                item['username'] ??
-                                'Unknown'),
-                            subtitle: FutureBuilder<Map<String, double>>(
-                              future: friendProvider.getFriendBalance(item['id']),
-                              builder: (context, snapshot) {
-                                if (snapshot.connectionState == ConnectionState.waiting) {
-                                  return const Text('Loading balances...');
-                                }
-                                if (snapshot.hasError) {
-                                  return const Text('Could not load balances');
-                                }
-                                final youGet = snapshot.data?['youAreOwed'] ?? 0.0;
-                                final youOwe = snapshot.data?['youOwe'] ?? 0.0;
-                                final netBalance = youGet - youOwe;
-                                
-                                if (netBalance > 0) {
-                                  return Text(
-                                    'You get ${currencyProvider.format(netBalance)}',
-                                    style: const TextStyle(color: Colors.green),
-                                  );
-                                } else if (netBalance < 0) {
-                                  return Text(
-                                    'You owe ${currencyProvider.format(netBalance.abs())}',
-                                    style: const TextStyle(color: Colors.red),
-                                  );
-                                } else {
-                                  return const Text('Settled up');
-                                }
-                              },
+                            title: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(displayName),
+                                ),
+                                if (isCustom && !isLinked)
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .surfaceContainerHighest,
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: const Text(
+                                      'Name only',
+                                      style: TextStyle(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w500),
+                                    ),
+                                  ),
+                              ],
                             ),
-
+                            subtitle: isCustom && !isLinked
+                                ? Row(
+                                    children: [
+                                      Icon(Icons.link,
+                                          size: 13,
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .primary),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        'Tap to connect account',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .primary,
+                                        ),
+                                      ),
+                                    ],
+                                  )
+                                : (netBalance > 0
+                                    ? Text(
+                                        'You get ${currencyProvider.format(netBalance)}',
+                                        style: const TextStyle(
+                                            color: Colors.green),
+                                      )
+                                    : netBalance < 0
+                                        ? Text(
+                                            'You owe ${currencyProvider.format(netBalance.abs())}',
+                                            style: const TextStyle(
+                                                color: Colors.red),
+                                          )
+                                        : const Text('Settled up')),
                             onTap: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                    builder: (context) => FriendDetailsScreen(
-                                        friendId: item['id'])),
-                              );
+                              if (isCustom && !isLinked) {
+                                _showLinkFriendDialog(
+                                    friendProvider, friendId, displayName);
+                              } else {
+                                final targetId =
+                                    item['linked_user_id'] ?? friendId;
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) =>
+                                        FriendDetailsScreen(friendId: targetId),
+                                  ),
+                                );
+                              }
                             },
                           ),
                         );
@@ -455,30 +504,144 @@ class _GroupsScreenState extends State<GroupsScreen>
   void _showAddFriendDialog(FriendProvider friendProvider) {
     _addFriendController.clear();
     final outer = context; // <— capture screen context
+    bool isNameOnly = false;
+
+    showDialog(
+      context: outer,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            title: const Text('Add Friend'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SegmentedButton<bool>(
+                  segments: const [
+                    ButtonSegment(
+                      value: false,
+                      label: Text('Shaire User'),
+                      icon: Icon(Icons.person_search),
+                    ),
+                    ButtonSegment(
+                      value: true,
+                      label: Text('Name Only'),
+                      icon: Icon(Icons.badge_outlined),
+                    ),
+                  ],
+                  selected: {isNameOnly},
+                  onSelectionChanged: (newSelection) {
+                    setDialogState(() {
+                      isNameOnly = newSelection.first;
+                      _addFriendController.clear();
+                    });
+                  },
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _addFriendController,
+                  autofocus: true,
+                  decoration: InputDecoration(
+                    labelText:
+                        isNameOnly ? "Friend's Name" : "Username or Email",
+                    hintText: isNameOnly
+                        ? "e.g. Alex"
+                        : "e.g. alex or alex@gmail.com",
+                    helperText: isNameOnly
+                        ? "Quickly add now, link to account later"
+                        : null,
+                    border: const OutlineInputBorder(),
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogCtx),
+                child: const Text('CANCEL'),
+              ),
+              ElevatedButton(
+                onPressed: () async {
+                  final input = _addFriendController.text.trim();
+                  if (input.isEmpty) return;
+
+                  Navigator.pop(dialogCtx);
+                  try {
+                    if (isNameOnly) {
+                      await friendProvider.addCustomFriend(input);
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(outer).showSnackBar(
+                        SnackBar(content: Text('Friend "$input" added!')),
+                      );
+                    } else {
+                      await friendProvider.sendFriendRequest(input);
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(outer).showSnackBar(
+                        const SnackBar(content: Text('Friend request sent!')),
+                      );
+                    }
+                  } catch (e) {
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(outer).showSnackBar(
+                      SnackBar(content: Text('Error: ${e.toString()}')),
+                    );
+                  }
+                },
+                child: Text(isNameOnly ? 'ADD FRIEND' : 'SEND REQUEST'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  void _showLinkFriendDialog(FriendProvider friendProvider,
+      String customFriendId, String friendName) {
+    final linkController = TextEditingController();
+    final outer = context;
+
     showDialog(
       context: outer,
       builder: (dialogCtx) => AlertDialog(
-        title: const Text('Add Friend'),
-        content: TextField(
-          controller: _addFriendController,
-          decoration: const InputDecoration(
-            labelText: 'Friend\'s Email or Username',
-          ),
-          autofocus: true,
+        title: Text('Connect $friendName'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Link $friendName to their Shaire account to sync shared expenses and balances.',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: linkController,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: "Username or Email",
+                hintText: "e.g. alex or alex@gmail.com",
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.person_search),
+              ),
+            ),
+          ],
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(dialogCtx),
-              child: const Text('CANCEL')),
+            onPressed: () => Navigator.pop(dialogCtx),
+            child: const Text('CANCEL'),
+          ),
           ElevatedButton(
             onPressed: () async {
-              final input = _addFriendController.text;
-              Navigator.pop(dialogCtx); // <— pop the dialog only
+              final input = linkController.text.trim();
+              if (input.isEmpty) return;
+
+              Navigator.pop(dialogCtx);
               try {
-                await friendProvider.sendFriendRequest(input);
+                await friendProvider.linkCustomFriend(customFriendId, input);
                 if (!mounted) return;
                 ScaffoldMessenger.of(outer).showSnackBar(
-                  const SnackBar(content: Text('Friend request sent!')),
+                  SnackBar(content: Text('$friendName connected to $input!')),
                 );
               } catch (e) {
                 if (!mounted) return;
@@ -487,7 +650,7 @@ class _GroupsScreenState extends State<GroupsScreen>
                 );
               }
             },
-            child: const Text('SEND REQUEST'),
+            child: const Text('CONNECT'),
           ),
         ],
       ),

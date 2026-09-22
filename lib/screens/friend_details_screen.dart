@@ -63,9 +63,26 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
           .from('profiles')
           .select('full_name, username, avatar_url')
           .eq('id', widget.friendId)
-          .single();
+          .maybeSingle();
 
-      _friendProfile = profileRes;
+      if (profileRes != null) {
+        _friendProfile = profileRes;
+      } else {
+        try {
+          final customRes = await _supabase
+              .from('custom_friends')
+              .select('name')
+              .eq('id', widget.friendId)
+              .maybeSingle();
+          if (customRes != null) {
+            _friendProfile = {
+              'full_name': customRes['name'],
+              'username': null,
+              'avatar_url': null,
+            };
+          }
+        } catch (_) {}
+      }
 
       // 2. Load shared expenses
       final expensesRes = await _supabase.rpc(

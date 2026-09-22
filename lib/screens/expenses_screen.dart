@@ -3,7 +3,6 @@ import 'package:provider/provider.dart';
 import 'package:shaire/providers/prediction_provider.dart';
 import '../providers/currency_provider.dart';
 import 'package:fl_chart/fl_chart.dart';
-import 'dart:math' as math;
 import '../database/expense.dart';
 import '../providers/expense_provider.dart';
 import 'package:intl/intl.dart';
@@ -22,6 +21,12 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   List<List<double>> _weeklyExpensesData = [];
   List<String> _weekLabels = [];
   int _currentWeekIndex = 0;
+  double _maxChartExpense = 50.0;
+  List<Map<String, dynamic>> _cachedCategories = [];
+  String _highestCategory = 'Unknown';
+  String _lowestCategory = 'Unknown';
+  List<Expense> _cachedRecentExpenses = [];
+  List<Expense>? _lastProcessedExpenses;
 
   @override
   void initState() {
@@ -48,62 +53,16 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     try {
       final expenseProvider =
           Provider.of<ExpenseProvider>(context, listen: false);
-      await expenseProvider.fetchExpenses();
-
-      // Process expenses to generate weekly data
-      _processExpensesData(expenseProvider.expenses);
-
-      // Only fetch predictions if cache is stale
       final predictionProvider =
           Provider.of<PredictionProvider>(context, listen: false);
+      await expenseProvider.fetchExpenses();
+
       if (predictionProvider.needsRefresh) {
         await predictionProvider.fetchPredictions(expenseProvider.expenses);
       }
 
-      if (!predictionProvider.hasError &&
-          predictionProvider.futurePredictions.isNotEmpty) {
-        final now = DateTime.now();
-        // Calculate the start date of the next week (assuming Monday is start)
-        final daysUntilNextMonday = 8 - now.weekday;
-        final startOfNextWeek =
-            DateTime(now.year, now.month, now.day + daysUntilNextMonday);
-        final startOfWeekAfterNext =
-            startOfNextWeek.add(const Duration(days: 7));
-        final startOfTwoWeeksAfterNext =
-            startOfWeekAfterNext.add(const Duration(days: 7));
-
-        double nextWeekPredictedTotal = 0;
-        double weekAfterNextPredictedTotal = 0;
-
-        for (final prediction in predictionProvider.futurePredictions) {
-          final predictionDate = prediction.date;
-          // Check if prediction falls within the next week
-          if (!predictionDate.isBefore(startOfNextWeek) &&
-              predictionDate.isBefore(startOfWeekAfterNext)) {
-            nextWeekPredictedTotal += prediction.predictedAmount;
-          }
-          // Check if prediction falls within the week after next
-          else if (!predictionDate.isBefore(startOfWeekAfterNext) &&
-              predictionDate.isBefore(startOfTwoWeeksAfterNext)) {
-            weekAfterNextPredictedTotal += prediction.predictedAmount;
-          }
-        }
-
-        // Ensure _weeklyExpensesData has the list and it's long enough
-        if (_weeklyExpensesData.isNotEmpty &&
-            _weeklyExpensesData[0].length >= 7) {
-          _weeklyExpensesData[0][5] =
-              nextWeekPredictedTotal; // Index 5 is "In 1w"
-          _weeklyExpensesData[0][6] =
-              weekAfterNextPredictedTotal; // Index 6 is "In 2w"
-          LoggerService.debug(
-              'Updated weekly data with predictions: ${_weeklyExpensesData[0]}');
-        } else {
-          LoggerService.warning(
-              'Weekly expenses data structure issue, cannot add predictions.');
-        }
-      }
-
+      if (!mounted) return;
+      _processExpensesData(expenseProvider.expenses);
       setState(() => _isLoading = false);
     } catch (e) {
       LoggerService.error(
@@ -114,79 +73,36 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     }
   }
 
-  // Add a pull-to-refresh handler that forces prediction refresh
+  // Pull-to-refresh handler that forces prediction refresh
   Future<void> _refreshWithForcedUpdate() async {
     try {
       final expenseProvider =
           Provider.of<ExpenseProvider>(context, listen: false);
-      await expenseProvider.fetchExpenses();
-
-      _processExpensesData(expenseProvider.expenses);
-
       final predictionProvider =
           Provider.of<PredictionProvider>(context, listen: false);
-      // Force refresh of predictions
+      await expenseProvider.fetchExpenses();
+
       await predictionProvider.fetchPredictions(expenseProvider.expenses,
           forceRefresh: true);
 
-      if (!predictionProvider.hasError &&
-          predictionProvider.futurePredictions.isNotEmpty) {
-        final now = DateTime.now();
-        final daysUntilNextMonday = 8 - now.weekday;
-        final startOfNextWeek =
-            DateTime(now.year, now.month, now.day + daysUntilNextMonday);
-        final startOfWeekAfterNext =
-            startOfNextWeek.add(const Duration(days: 7));
-        final startOfTwoWeeksAfterNext =
-            startOfWeekAfterNext.add(const Duration(days: 7));
-
-        double nextWeekPredictedTotal = 0;
-        double weekAfterNextPredictedTotal = 0;
-
-        for (final prediction in predictionProvider.futurePredictions) {
-          final predictionDate = prediction.date;
-          if (!predictionDate.isBefore(startOfNextWeek) &&
-              predictionDate.isBefore(startOfWeekAfterNext)) {
-            nextWeekPredictedTotal += prediction.predictedAmount;
-          } else if (!predictionDate.isBefore(startOfWeekAfterNext) &&
-              predictionDate.isBefore(startOfTwoWeeksAfterNext)) {
-            weekAfterNextPredictedTotal += prediction.predictedAmount;
-          }
-        }
-
-        if (_weeklyExpensesData.isNotEmpty &&
-            _weeklyExpensesData[0].length >= 7) {
-          _weeklyExpensesData[0][5] = nextWeekPredictedTotal;
-          _weeklyExpensesData[0][6] = weekAfterNextPredictedTotal;
-          LoggerService.debug(
-              'Updated weekly data with predictions on refresh: ${_weeklyExpensesData[0]}');
-        } else {
-          LoggerService.warning(
-              'Weekly expenses data structure issue on refresh, cannot add predictions.');
-        }
-      }
-      if (mounted) {
-        setState(() {});
-      }
+      if (!mounted) return;
+      _processExpensesData(expenseProvider.expenses);
+      setState(() {});
     } catch (e) {
       LoggerService.error('Error refreshing data', e);
     }
   }
 
   void _processExpensesData(List<Expense> expenses) {
-    // Create a map to group expenses by week
-    final Map<String, double> weeklyTotals = {};
+    _lastProcessedExpenses = expenses;
     final now = DateTime.now();
-    final currentWeek = _getWeekNumber(now);
 
     // Generate week labels for the last 2 weeks and 2 future weeks
     _weekLabels = [];
     final weeklyData = List<double>.filled(5, 0); // 5 weeks total
     _currentWeekIndex = 2; // "This week" index is in the middle
 
-    // Generate week labels
     for (int i = -2; i <= 2; i++) {
-      final weekDate = DateTime(now.year, now.month, now.day + (i * 7));
       final weekLabel = i == 0
           ? 'This week'
           : i == -1
@@ -201,7 +117,6 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     for (var expense in expenses) {
       final weekDiff = _getWeekDifference(expense.date, now);
       if (weekDiff >= -2 && weekDiff <= 0) {
-        // Only past 2 weeks and current week
         final index = weekDiff + 2; // Convert to array index (0-2)
         weeklyData[index] += expense.totalAmount;
       }
@@ -209,27 +124,23 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
 
     // Calculate week-over-week change percentage
     if (weeklyData[1] > 0) {
-      // If there's data for last week
       _expenseChangePercent =
           ((weeklyData[2] - weeklyData[1]) / weeklyData[1]) * 100;
     } else {
       _expenseChangePercent = 0;
     }
 
-    // Store weekly data
     _weeklyExpensesData = [weeklyData];
 
-    // Update future predictions
+    // Update future predictions in weekly data
     final predictionProvider =
         Provider.of<PredictionProvider>(context, listen: false);
     if (!predictionProvider.hasError &&
         predictionProvider.futurePredictions.isNotEmpty) {
-      final now = DateTime.now();
       final daysUntilNextMonday = 8 - now.weekday;
       final startOfNextWeek =
           DateTime(now.year, now.month, now.day + daysUntilNextMonday);
-      final startOfWeekAfterNext =
-          startOfNextWeek.add(const Duration(days: 7));
+      final startOfWeekAfterNext = startOfNextWeek.add(const Duration(days: 7));
       final startOfTwoWeeksAfterNext =
           startOfWeekAfterNext.add(const Duration(days: 7));
 
@@ -247,10 +158,64 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
         }
       }
 
-      // Update the predictions in the weekly data
-      _weeklyExpensesData[0][3] = nextWeekPredictedTotal;     // In 1w
+      _weeklyExpensesData[0][3] = nextWeekPredictedTotal; // In 1w
       _weeklyExpensesData[0][4] = weekAfterNextPredictedTotal; // In 2w
     }
+
+    // Precompute chart max expense
+    if (_weeklyExpensesData.isNotEmpty && _weeklyExpensesData[0].isNotEmpty) {
+      final maxVal =
+          _weeklyExpensesData[0].reduce((max, v) => v > max ? v : max);
+      _maxChartExpense = maxVal > 0 ? maxVal * 1.2 : 50.0;
+    } else {
+      _maxChartExpense = 50.0;
+    }
+
+    // Precompute category breakdown and spending insights
+    final Map<String, double> categoryTotals = {};
+    double totalAmount = 0;
+    for (var expense in expenses) {
+      String category = _getCategoryName(expense.categoryId);
+      categoryTotals.update(category, (val) => val + expense.totalAmount,
+          ifAbsent: () => expense.totalAmount);
+      totalAmount += expense.totalAmount;
+    }
+
+    _cachedCategories = categoryTotals.entries.map((entry) {
+      int percent =
+          totalAmount > 0 ? ((entry.value / totalAmount) * 100).round() : 0;
+      return {
+        'name': entry.key,
+        'amount': entry.value,
+        'percent': percent,
+        'icon': _getCategoryIcon(entry.key),
+      };
+    }).toList()
+      ..sort((a, b) => (b['amount'] as num).compareTo(a['amount'] as num));
+
+    String highCat = 'Unknown';
+    String lowCat = 'Unknown';
+    double highestAmount = 0;
+    double lowestAmount = double.infinity;
+
+    categoryTotals.forEach((category, amount) {
+      if (amount > highestAmount) {
+        highestAmount = amount;
+        highCat = category;
+      }
+      if (amount < lowestAmount && amount > 0) {
+        lowestAmount = amount;
+        lowCat = category;
+      }
+    });
+    _highestCategory = highCat;
+    _lowestCategory = lowCat;
+
+    // Precompute recent expenses (top 5 sorted by date)
+    _cachedRecentExpenses = (List<Expense>.from(expenses)
+          ..sort((a, b) => b.date.compareTo(a.date)))
+        .take(5)
+        .toList();
   }
 
   // Helper to get week number from date
@@ -318,8 +283,10 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
-                    color:
-                        Theme.of(context).colorScheme.primary.withOpacity(0.1),
+                    color: Theme.of(context)
+                        .colorScheme
+                        .primary
+                        .withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(16),
                   ),
                   child: Text(
@@ -510,6 +477,10 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     final expenseProvider = Provider.of<ExpenseProvider>(context);
     final expenses = expenseProvider.expenses;
 
+    if (!identical(expenses, _lastProcessedExpenses)) {
+      _processExpensesData(expenses);
+    }
+
     return Scaffold(
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
@@ -528,12 +499,11 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                       _buildPredictions(
                           context, currencyProvider), // Add this line
                       const SizedBox(height: 24),
-                      _buildCategoryBreakdown(
-                          context, currencyProvider, expenses),
+                      _buildCategoryBreakdown(context, currencyProvider),
                       const SizedBox(height: 24),
-                      _buildAIInsights(context, expenses),
+                      _buildAIInsights(context),
                       const SizedBox(height: 24),
-                      _buildRecentExpenses(context, currencyProvider, expenses),
+                      _buildRecentExpenses(context, currencyProvider),
                     ],
                   ),
                 ),
@@ -545,15 +515,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   // Update the expense graph to use real data
   Widget _buildExpensesGraph(
       BuildContext context, CurrencyProvider currencyProvider) {
-    // Calculate max expense from real data
-    double maxExpense = 0;
-    if (_weeklyExpensesData.isNotEmpty && _weeklyExpensesData[0].isNotEmpty) {
-      maxExpense = _weeklyExpensesData[0]
-          .reduce((max, value) => value > max ? value : max);
-      maxExpense = maxExpense > 0 ? maxExpense * 1.2 : 50;
-    } else {
-      maxExpense = 50;
-    }
+    final maxExpense = _maxChartExpense;
 
     return Card(
       elevation: 2,
@@ -587,7 +549,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                             enabled: true,
                             touchTooltipData: BarTouchTooltipData(
                               getTooltipColor: (spot) => Colors.blueGrey,
-                              getTooltipItem: (group, groupIndex, rod, rodIndex) {
+                              getTooltipItem:
+                                  (group, groupIndex, rod, rodIndex) {
                                 return BarTooltipItem(
                                   currencyProvider.format(rod.toY),
                                   const TextStyle(color: Colors.white),
@@ -601,7 +564,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                               sideTitles: SideTitles(
                                 showTitles: true,
                                 getTitlesWidget: (value, meta) {
-                                  if (value < 0 || value >= _weekLabels.length) {
+                                  if (value < 0 ||
+                                      value >= _weekLabels.length) {
                                     return const Text('');
                                   }
                                   return Padding(
@@ -626,8 +590,10 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                             ),
                           ),
                           borderData: FlBorderData(show: false),
-                          barGroups:
-                              _weeklyExpensesData[0].asMap().entries.map((entry) {
+                          barGroups: _weeklyExpensesData[0]
+                              .asMap()
+                              .entries
+                              .map((entry) {
                             final index = entry.key;
                             final value = entry.value;
                             return BarChartGroupData(
@@ -678,36 +644,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     );
   }
 
-  // Update category breakdown to use real data
-  Widget _buildCategoryBreakdown(BuildContext context,
-      CurrencyProvider currencyProvider, List<Expense> expenses) {
-    // Calculate totals by category from real data
-    final Map<String, double> categoryTotals = {};
-    double totalAmount = 0;
-
-    for (var expense in expenses) {
-      String category = _getCategoryName(expense.categoryId);
-      categoryTotals.update(category, (value) => value + expense.totalAmount,
-          ifAbsent: () => expense.totalAmount);
-      totalAmount += expense.totalAmount;
-    }
-
-    // Convert to percentage and create category items
-    final categories = categoryTotals.entries.map((entry) {
-      int percent =
-          totalAmount > 0 ? ((entry.value / totalAmount) * 100).round() : 0;
-      return {
-        'name': entry.key,
-        'amount': entry.value,
-        'percent': percent,
-        'icon': _getCategoryIcon(entry.key)
-      };
-    }).toList();
-
-    // Sort by amount (highest first)
-    categories.sort(
-        (a, b) => (b['amount'] as double).compareTo(a['amount'] as double));
-
+  Widget _buildCategoryBreakdown(
+      BuildContext context, CurrencyProvider currencyProvider) {
     return Card(
       elevation: 2,
       shape: RoundedRectangleBorder(
@@ -723,10 +661,10 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
               style: Theme.of(context).textTheme.titleLarge,
             ),
             const SizedBox(height: 16),
-            categories.isEmpty
+            _cachedCategories.isEmpty
                 ? const Center(child: Text('No expense data available'))
                 : Column(
-                    children: categories
+                    children: _cachedCategories
                         .map((category) => _buildCategoryItem(
                               context,
                               currencyProvider,
@@ -743,15 +681,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     );
   }
 
-  // Update the recent expenses list to use real data
-  Widget _buildRecentExpenses(BuildContext context,
-      CurrencyProvider currencyProvider, List<Expense> allExpenses) {
-    // Sort expenses by date (most recent first) and take the top 5
-    final recentExpenses = List<Expense>.from(allExpenses)
-      ..sort((a, b) => b.date.compareTo(a.date));
-
-    final expensesToShow = recentExpenses.take(5).toList();
-
+  Widget _buildRecentExpenses(
+      BuildContext context, CurrencyProvider currencyProvider) {
     return Card(
       elevation: 2,
       shape: RoundedRectangleBorder(
@@ -778,7 +709,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
               ],
             ),
             const SizedBox(height: 8),
-            expensesToShow.isEmpty
+            _cachedRecentExpenses.isEmpty
                 ? const Center(
                     child: Padding(
                       padding: EdgeInsets.all(16.0),
@@ -786,7 +717,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                     ),
                   )
                 : Column(
-                    children: expensesToShow.map((expense) {
+                    children: _cachedRecentExpenses.map((expense) {
                       return _buildExpenseItem(
                         context,
                         currencyProvider,
@@ -839,33 +770,9 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     );
   }
 
-  Widget _buildAIInsights(BuildContext context, List<Expense> expenses) {
-    // Generate insights based on real expense data
-    final Map<String, double> categoryTotals = {};
-
-    // Calculate totals by category
-    for (var expense in expenses) {
-      String category = _getCategoryName(expense.categoryId);
-      categoryTotals.update(category, (value) => value + expense.totalAmount,
-          ifAbsent: () => expense.totalAmount);
-    }
-
-    // Find highest and lowest categories
-    String highestCategory = 'Unknown';
-    String lowestCategory = 'Unknown';
-    double highestAmount = 0;
-    double lowestAmount = double.infinity;
-
-    categoryTotals.forEach((category, amount) {
-      if (amount > highestAmount) {
-        highestAmount = amount;
-        highestCategory = category;
-      }
-      if (amount < lowestAmount && amount > 0) {
-        lowestAmount = amount;
-        lowestCategory = category;
-      }
-    });
+  Widget _buildAIInsights(BuildContext context) {
+    final hasNoExpenses =
+        _lastProcessedExpenses == null || _lastProcessedExpenses!.isEmpty;
 
     return Card(
       elevation: 2,
@@ -894,24 +801,25 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
             const SizedBox(height: 16),
             _buildInsightTile(
               context,
-              _getCategoryIcon(highestCategory),
-              '$highestCategory is your highest expense category this month.',
+              _getCategoryIcon(_highestCategory),
+              '$_highestCategory is your highest expense category this month.',
               'Consider setting a budget for this category.',
             ),
             const Divider(),
             _buildInsightTile(
               context,
               Icons.trending_down,
-              'You\'ve spent least on $lowestCategory recently.',
+              'You\'ve spent least on $_lowestCategory recently.',
               'Great work on controlling these expenses!',
             ),
-            if (expenses.isEmpty) const Divider(),
-            _buildInsightTile(
-              context,
-              Icons.add_circle_outline,
-              'No expenses recorded yet.',
-              'Start adding your expenses to see personalized insights.',
-            ),
+            if (hasNoExpenses) const Divider(),
+            if (hasNoExpenses)
+              _buildInsightTile(
+                context,
+                Icons.add_circle_outline,
+                'No expenses recorded yet.',
+                'Start adding your expenses to see personalized insights.',
+              ),
           ],
         ),
       ),
@@ -1121,17 +1029,6 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       double amount,
       int percent,
       IconData icon) {
-    final List<Color> colors = [
-      Colors.blue.shade200,
-      Colors.blue.shade300,
-      Colors.blue.shade400,
-      Colors.blue.shade500,
-      Colors.blue.shade600,
-    ];
-
-    final colorIndex = math.min(
-        (categories.length * percent / 100).round(), colors.length - 1);
-
     return Padding(
       padding: const EdgeInsets.only(bottom: 12.0),
       child: Row(
