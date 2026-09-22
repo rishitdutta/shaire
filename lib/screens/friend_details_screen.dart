@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../providers/currency_provider.dart';
 import '../providers/expense_provider.dart';
 import '../database/balance.dart';
+import '../database/payment.dart';
 import 'add_expense_screen.dart';
 
 class FriendDetailsScreen extends StatefulWidget {
@@ -94,11 +95,10 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
       );
 
       // 3. Load payments between the two users
-      final paymentsRes = await _supabase
-          .from('payments')
-          .select('*')
-          .or('and(from_user_id.eq.$_currentUserId,to_user_id.eq.${widget.friendId}),and(from_user_id.eq.${widget.friendId},to_user_id.eq.$_currentUserId)')
-          .order('payment_date', ascending: false);
+      final paymentsRes = await PaymentService().fetchPaymentsBetweenUsers(
+        _currentUserId!,
+        widget.friendId.toString(),
+      );
 
       _expenses.clear();
       double expensesYouOwe = 0;
@@ -196,17 +196,15 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
         final fromId = _netBalance < 0 ? _currentUserId! : widget.friendId.toString();
         final toId = _netBalance < 0 ? widget.friendId.toString() : _currentUserId!;
 
-        // 1. Create a payment record
-        await _supabase.from('payments').insert({
-          'from_user_id': fromId,
-          'to_user_id': toId,
-          'amount': selectedAmount,
-          'currency': currencyCode,
-          'payment_method': 'manual',
-          'payment_date': DateTime.now().toIso8601String(),
-          'status': 'completed',
-          'notes': 'Settlement payment',
-        });
+        // 1. Create a payment record via PaymentService
+        await PaymentService().createPaymentRecord(
+          fromUserId: fromId,
+          toUserId: toId,
+          amount: selectedAmount,
+          currency: currencyCode,
+          paymentMethod: 'manual',
+          notes: 'Settlement payment',
+        );
 
         // 2. Adjust balances in database
         final balanceService = BalanceService();

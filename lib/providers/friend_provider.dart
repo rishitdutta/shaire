@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:logger/logger.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../database/payment.dart';
 
 class FriendProvider with ChangeNotifier {
   final SupabaseClient _supabase = Supabase.instance.client;
@@ -43,10 +44,8 @@ class FriendProvider with ChangeNotifier {
         },
       );
 
-      final paymentsRes = await _supabase
-          .from('payments')
-          .select('amount, from_user_id, to_user_id')
-          .or('and(from_user_id.eq.$currentUserId,to_user_id.eq.$friendId),and(from_user_id.eq.$friendId,to_user_id.eq.$currentUserId)');
+      final paymentsRes = await PaymentService()
+          .fetchPaymentsBetweenUsers(currentUserId!, friendId);
 
       double expensesYouOwe = 0.0;
       double expensesYouAreOwed = 0.0;

@@ -200,69 +200,6 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 }
 
-/* class AuthScreen extends StatefulWidget {
-  const AuthScreen({super.key, required this.isSignUp});
-
-  final bool isSignUp;
-
-  @override
-  State<AuthScreen> createState() => _AuthScreenState();
-} */
-
-/* class _AuthScreenState extends State<AuthScreen> {
-// For sign-up
-// For sign-up
-  // Track sign-up mode in state
-
-  @override
-  void initState() {
-    super.initState();
-// Initialize from widget property
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final primaryColor = Theme.of(context).colorScheme.primary;
-
-    // Update the build method to use _isSignUp instead of widget.isSignUp
-    return Scaffold(
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Spacer(),
-            // Logo in center - match size with landing page
-            SvgPicture.asset(
-              'assets/images/logo.svg',
-              height: 160,
-              width: 160,
-            ),
-            const SizedBox(height: 24),
-            // "Shaire" text logo - match size with landing page
-            SvgPicture.asset(
-              'assets/images/logo_text.svg',
-              height: 50,
-              colorFilter: ColorFilter.mode(
-                primaryColor,
-                BlendMode.srcIn,
-              ),
-            ),
-            const Spacer(),
-            // Loader at the bottom
-            Padding(
-              padding: const EdgeInsets.only(bottom: 80.0),
-              child: CircularProgressIndicator(
-                color: primaryColor,
-                strokeWidth: 3,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-} */
-
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
 

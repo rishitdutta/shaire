@@ -112,6 +112,49 @@ class PaymentService {
     }
   }
 
+  /// Fetch all payments between two users ordered by payment_date descending
+  Future<List<Map<String, dynamic>>> fetchPaymentsBetweenUsers(
+      String user1, String user2) async {
+    try {
+      final res = await supabase
+          .from('payments')
+          .select('*')
+          .or('and(from_user_id.eq.$user1,to_user_id.eq.$user2),and(from_user_id.eq.$user2,to_user_id.eq.$user1)')
+          .order('payment_date', ascending: false);
+      return List<Map<String, dynamic>>.from(res);
+    } catch (error) {
+      print('Error fetching payments between users: $error');
+      return [];
+    }
+  }
+
+  /// Create a payment record directly
+  Future<bool> createPaymentRecord({
+    required String fromUserId,
+    required String toUserId,
+    required double amount,
+    required String currency,
+    String paymentMethod = 'manual',
+    String? notes,
+  }) async {
+    try {
+      await supabase.from('payments').insert({
+        'from_user_id': fromUserId,
+        'to_user_id': toUserId,
+        'amount': amount,
+        'currency': currency,
+        'payment_method': paymentMethod,
+        'payment_date': DateTime.now().toIso8601String(),
+        'status': 'completed',
+        'notes': notes,
+      });
+      return true;
+    } catch (error) {
+      print('Error creating payment: $error');
+      return false;
+    }
+  }
+
   /// Delete a payment by ID
   Future<bool> deletePayment(int id) async {
     try {
