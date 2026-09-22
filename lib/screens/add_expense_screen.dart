@@ -19,6 +19,7 @@ import '../widgets/split_options_widget.dart';
 import '../widgets/contact_selector_section.dart';
 import '../widgets/receipt_scanner_section.dart';
 import '../widgets/loading_spinner.dart';
+import '../services/pdf_service.dart';
 
 class AddExpenseScreen extends StatefulWidget {
   final int? groupId;
@@ -82,11 +83,13 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
 
   // Loading state
   bool _isLoading = false;
+  String _loadingMessage = 'Saving expense & updating balances...';
 
   // Services
   final BillService _billService = BillService();
   final ReceiptService _receiptService = ReceiptService();
   int? _currentReceiptId;
+  File? _receiptImageFile;
 
   @override
   void initState() {
@@ -210,7 +213,10 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
 
   Future<void> _loadContactsData() async {
     try {
-      setState(() => _isLoading = true);
+      setState(() {
+        _isLoading = true;
+        _loadingMessage = 'Loading friends and groups...';
+      });
 
       final friendProvider =
           Provider.of<FriendProvider>(context, listen: false);
@@ -321,6 +327,11 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
             style: Theme.of(context).textTheme.headlineMedium),
         actions: [
           IconButton(
+            icon: const Icon(Icons.picture_as_pdf_outlined),
+            tooltip: 'Download Split PDF',
+            onPressed: _downloadSplitPdf,
+          ),
+          IconButton(
             icon: const Icon(Icons.document_scanner_outlined),
             tooltip: 'Scan receipt',
             onPressed: _scanReceipt,
@@ -328,8 +339,8 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
         ],
       ),
       body: _isLoading
-          ? const LoadingSpinner(
-              initialMessage: 'Saving expense & updating balances...',
+          ? LoadingSpinner(
+              initialMessage: _loadingMessage,
               wakeUpMessage: 'Please wait as the backend wakes up...',
             )
           : _buildMainContent(),
@@ -383,6 +394,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
                         ? _showBatchAssignmentOptions
                         : null,
                     onEditItem: _assignItemToContacts,
+                    onDownloadPdf: _downloadSplitPdf,
                   ),
                   const SizedBox(height: 80), // Space for button
                 ],
@@ -565,12 +577,25 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
     }
   }
 
-Future<File> _compressImage(File file) async {
-  final image = img.decodeImage(await file.readAsBytes());
-  final resized = img.copyResize(image!, width: 1024);
-  return File(file.path)
-    ..writeAsBytesSync(img.encodeJpg(resized, quality: 85));
-}
+  Future<File> _compressImage(File file) async {
+    try {
+      final bytes = await file.readAsBytes();
+      final image = img.decodeImage(bytes);
+      if (image == null) {
+        LoggerService.warning('Could not decode image for compression, using original file.');
+        return file;
+      }
+      final resized = img.copyResize(image, width: 1024);
+      final compressedBytes = img.encodeJpg(resized, quality: 85);
+      final tempDir = file.parent.path;
+      final tempPath = '$tempDir/compressed_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final compressedFile = File(tempPath)..writeAsBytesSync(compressedBytes);
+      return compressedFile;
+    } catch (e) {
+      LoggerService.warning('Image compression failed, using original file: $e');
+      return file;
+    }
+  }
 
   Future<void> _getImageAndProcess(ImageSource source) async {
     try {
@@ -578,96 +603,104 @@ Future<File> _compressImage(File file) async {
       final XFile? pickedFile = await picker.pickImage(source: source);
 
       if (pickedFile == null) return;
-      
-      setState(() => _isLoading = true);
 
-      final file = File(pickedFile.path);
-      Map<String, dynamic> billResult = {};
-
-      try {
-        // Upload receipt
-        final compressedFile = await _compressImage(file);
-
-        // Process image with OCR
-        billResult = await _billService.extractBillInfo(compressedFile);
-        LoggerService.debug('Bill OCR result: $billResult');
-
-        setState(() {
-        // Update controllers and bill entries for UI
-        if (billResult.containsKey('merchant_name')) {
-          _descriptionController.text = billResult['merchant_name'].toString();
-          _guessCategory();
-        }
-        if (billResult.containsKey('total_amount')) {
-          _totalAmountController.text = billResult['total_amount'].toString();
-        }
-        _billEntries.clear();
-        if (billResult.containsKey('items') && billResult['items'] is List) {
-          for (final item in billResult['items']) {
-            if (item is Map && item.containsKey('description') && item.containsKey('amount')) {
-              _billEntries.add(
-                BillEntry(
-                  description: item['description'].toString(),
-                  amount: double.tryParse(item['amount'].toString()) ?? 0.0,
-                  assignedTo: [],
-                  type: BillEntryType.item,
-                ),
-              );
-            }
-          }
-        }
+      setState(() {
+        _isLoading = true;
+        _loadingMessage = 'Scanning receipt & extracting items...';
       });
 
-      } catch (e) {
-        LoggerService.error('OCR processing failed', e);
-        billResult = {}; // Empty result if OCR fails
+      final file = File(pickedFile.path);
+      final fileToProcess = await _compressImage(file);
+      _receiptImageFile = fileToProcess;
+
+      LoggerService.info('Sending image to OCR backend: ${fileToProcess.path}');
+      final billResult = await _billService.extractBillInfo(fileToProcess);
+      LoggerService.debug('Bill OCR result: $billResult');
+
+      if (billResult.containsKey('error') && billResult['error'] != null) {
+        throw Exception(billResult['error'].toString());
       }
 
-      // Process OCR results
-      if (billResult.containsKey('items') && billResult['items'] is List) {
-        final items = billResult['items'] as List;
-        _billEntries.clear();
+      final List<BillEntry> newEntries = [];
 
-        // Add items from OCR
-        for (final item in items) {
-          if (item is Map && item.containsKey('description')) {
-            final price = item['price'] ?? item['amount'];
-            if (price != null) {
-              _billEntries.add(
+      // Extract merchant name if available
+      final merchant = billResult['merchant_name'] ?? billResult['merchant'];
+      if (merchant != null && merchant.toString().trim().isNotEmpty) {
+        _descriptionController.text = merchant.toString().trim();
+        _guessCategory();
+      }
+
+      // Extract total amount if available
+      final total = billResult['total_amount'] ?? billResult['total'];
+      if (total != null) {
+        _totalAmountController.text = total.toString();
+      }
+
+      // Extract line items
+      final rawItems = billResult['items'] ?? billResult['line_items'];
+      if (rawItems is List) {
+        for (final item in rawItems) {
+          if (item is Map) {
+            final desc = item['description'] ?? item['name'] ?? item['item'];
+            final rawPrice = item['amount'] ?? item['price'] ?? item['total'];
+            final price = double.tryParse(rawPrice?.toString() ?? '') ?? 0.0;
+
+            if (desc != null && desc.toString().trim().isNotEmpty) {
+              newEntries.add(
                 BillEntry(
-                  description: item['description'].toString(),
-                  amount: double.tryParse(price.toString()) ?? 0.0,
+                  description: desc.toString().trim(),
+                  amount: price,
                   assignedTo: [],
-                  type: BillEntryType.item,
+                  type: _parseBillEntryType(item['type']?.toString()),
                 ),
               );
             }
           }
         }
-
-        // Set total amount if available
-        if (billResult.containsKey('total')) {
-          _totalAmountController.text = billResult['total'].toString();
-        }
-
-        // Set description (merchant name)
-        if (billResult.containsKey('merchant')) {
-          _descriptionController.text = billResult['merchant'].toString();
-          _guessCategory(); // Guess category from description
-        }
       }
-
-      setState(() => _isLoading = false);
-    } catch (e) {
-      LoggerService.error('Error processing receipt image', e);
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error processing receipt: $e')),
-        );
+        setState(() {
+          _billEntries.clear();
+          _billEntries.addAll(newEntries);
+          _isLoading = false;
+        });
+
+        if (newEntries.isEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('No individual items could be identified from the bill.'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Extracted ${newEntries.length} items from receipt!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      LoggerService.error('Error processing receipt image', e);
+      if (mounted) {
         setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error reading receipt: ${e.toString().replaceAll("Exception: ", "")}'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 6),
+          ),
+        );
       }
     }
+  }
+
+  BillEntryType _parseBillEntryType(String? type) {
+    if (type == 'tax') return BillEntryType.tax;
+    if (type == 'discount') return BillEntryType.discount;
+    return BillEntryType.item;
   }
 
   void _guessCategory() {
@@ -890,6 +923,86 @@ Future<File> _compressImage(File file) async {
     }
   }
 
+  Future<void> _downloadSplitPdf() async {
+    try {
+      final totalAmount = double.tryParse(_totalAmountController.text) ?? 0.0;
+      if (totalAmount <= 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Please enter an amount before downloading the PDF')),
+        );
+        return;
+      }
+
+      final currencyProvider =
+          Provider.of<CurrencyProvider>(context, listen: false);
+      final currencySymbol = currencyProvider.currencySymbol;
+
+      final List<Map<String, dynamic>> participantShares = [];
+
+      // Add "You"
+      final yourShare =
+          double.tryParse(_individualAmountControllers['you']?.text ?? '') ??
+              (_selectedContactsData.isEmpty
+                  ? totalAmount
+                  : totalAmount / (_selectedContactsData.length + 1));
+
+      participantShares.add({
+        'name': 'You',
+        'share': yourShare,
+        'paid': totalAmount,
+      });
+
+      // Add friends
+      for (final contact in _selectedContactsData) {
+        final id = contact['id'].toString();
+        final name = contact['name'] as String;
+        final share =
+            double.tryParse(_individualAmountControllers[id]?.text ?? '') ??
+                (totalAmount / (_selectedContactsData.length + 1));
+        participantShares.add({
+          'name': name,
+          'share': share,
+          'paid': 0.0,
+        });
+      }
+
+      final merchantName = _descriptionController.text.trim().isNotEmpty
+          ? _descriptionController.text.trim()
+          : 'Expense';
+
+      Uint8List? receiptImageBytes;
+      if (_receiptImageFile != null && await _receiptImageFile!.exists()) {
+        try {
+          receiptImageBytes = await _receiptImageFile!.readAsBytes();
+        } catch (_) {}
+      }
+
+      await PdfService.downloadOrPrintPdf(
+        title: _descriptionController.text.trim().isNotEmpty
+            ? _descriptionController.text.trim()
+            : 'Expense Split',
+        merchantName: merchantName,
+        date: DateTime.now(),
+        totalAmount: totalAmount,
+        currencySymbol: currencySymbol,
+        splitType: _getSplitTypeString(_splitType),
+        billEntries: _billEntries,
+        participantShares: participantShares,
+        receiptImageBytes: receiptImageBytes,
+      );
+    } catch (e) {
+      LoggerService.error('Error generating split PDF', e);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error generating PDF: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
   Future<void> _saveExpense() async {
     if (_selectedContactsData.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -905,7 +1018,10 @@ Future<File> _compressImage(File file) async {
             Provider.of<ExpenseProvider>(context, listen: false);
         final currencyCode = currencyProvider.currencyCode;
 
-        setState(() => _isLoading = true);
+        setState(() {
+          _isLoading = true;
+          _loadingMessage = 'Saving expense & updating balances...';
+        });
 
         // Get the current user ID
         final user = Supabase.instance.client.auth.currentUser;

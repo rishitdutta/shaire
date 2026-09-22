@@ -26,12 +26,26 @@ class BillService {
       var responseData = await response.stream.bytesToString().timeout(const Duration(seconds: 30));
 
       if (response.statusCode == 200) {
-        return json.decode(responseData);
+        final decoded = json.decode(responseData);
+        if (decoded is Map<String, dynamic> && decoded.containsKey('error')) {
+          throw Exception(decoded['error']);
+        }
+        return decoded is Map<String, dynamic> ? decoded : <String, dynamic>{};
       } else {
-        throw Exception('Failed to extract bill info: ${response.statusCode}');
+        String errorMsg = 'Failed to extract bill info (HTTP ${response.statusCode})';
+        try {
+          final errorJson = json.decode(responseData);
+          if (errorJson is Map && errorJson.containsKey('detail')) {
+            errorMsg = errorJson['detail'].toString();
+          } else if (errorJson is Map && errorJson.containsKey('error')) {
+            errorMsg = errorJson['error'].toString();
+          }
+        } catch (_) {}
+        throw Exception(errorMsg);
       }
     } catch (e) {
-      throw Exception('Error extracting bill info: $e');
+      LoggerService.error('Error extracting bill info', e);
+      rethrow;
     }
   }
 

@@ -22,12 +22,14 @@ class ReceiptScannerSection extends StatelessWidget {
   final List<BillEntry> billEntries;
   final VoidCallback? onBatchAssign;
   final Function(BillEntry item, int index) onEditItem;
+  final VoidCallback? onDownloadPdf;
 
   const ReceiptScannerSection({
     super.key,
     required this.billEntries,
     required this.onBatchAssign,
     required this.onEditItem,
+    this.onDownloadPdf,
   });
 
   @override
@@ -46,10 +48,23 @@ class ReceiptScannerSection extends StatelessWidget {
               'Receipt Items',
               style: Theme.of(context).textTheme.titleLarge,
             ),
-            TextButton.icon(
-              icon: const Icon(Icons.people),
-              label: const Text('Batch Assign'),
-              onPressed: onBatchAssign,
+            Row(
+              children: [
+                if (onDownloadPdf != null)
+                  TextButton.icon(
+                    icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
+                    label: const Text('Download PDF'),
+                    onPressed: onDownloadPdf,
+                  ),
+                if (onBatchAssign != null) ...[
+                  const SizedBox(width: 4),
+                  TextButton.icon(
+                    icon: const Icon(Icons.people, size: 18),
+                    label: const Text('Batch Assign'),
+                    onPressed: onBatchAssign,
+                  ),
+                ],
+              ],
             ),
           ],
         ),
