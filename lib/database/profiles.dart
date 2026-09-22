@@ -1,4 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../services/logger_service.dart';
 
 class Profile {
   final String id;
@@ -69,7 +70,7 @@ class ProfileService {
 
       return Profile.fromJson(response);
     } catch (error) {
-      print('Error fetching profile: $error');
+      LoggerService.error('Error fetching profile: $error');
       return null;
     }
   }
@@ -77,10 +78,10 @@ class ProfileService {
   Future<bool> createProfile(Profile profile) async {
     try {
       await supabase.from('profiles').insert(profile.toJson());
-      print('Profile created successfully');
+      LoggerService.info('Profile created successfully');
       return true;
     } catch (error) {
-      print('Error creating profile: $error');
+      LoggerService.error('Error creating profile: $error');
       return false;
     }
   }
@@ -91,10 +92,10 @@ class ProfileService {
           .from('profiles')
           .update(profile.toJson())
           .eq('username', profile.username);
-      print('Profile updated successfully');
+      LoggerService.info('Profile updated successfully');
       return true;
     } catch (error) {
-      print('Error updating profile: $error');
+      LoggerService.error('Error updating profile: $error');
       return false;
     }
   }
@@ -102,10 +103,10 @@ class ProfileService {
   Future<bool> deleteProfile(String username) async {
     try {
       await supabase.from('profiles').delete().eq('username', username);
-      print('Profile deleted successfully');
+      LoggerService.info('Profile deleted successfully');
       return true;
     } catch (error) {
-      print('Error deleting profile: $error');
+      LoggerService.error('Error deleting profile: $error');
       return false;
     }
   }

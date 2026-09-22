@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:convert';
+import '../services/logger_service.dart';
 
 class UserProvider extends ChangeNotifier {
   final SupabaseClient _supabase = Supabase.instance.client;
@@ -32,7 +33,7 @@ class UserProvider extends ChangeNotifier {
         }
         notifyListeners();
       } catch (e) {
-        print('Error loading cached user data: $e');
+        LoggerService.error('Error loading cached user data: $e');
         // Consider clearing cache if decode fails
         // await clearCache();
       }

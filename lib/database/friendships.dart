@@ -1,4 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../services/logger_service.dart';
 
 class Friendship {
   final int id;
@@ -50,7 +51,7 @@ class FriendshipService {
 
       return Friendship.fromJson(response);
     } catch (error) {
-      print('Error fetching friendship: $error');
+      LoggerService.error('Error fetching friendship: $error');
       return null;
     }
   }
@@ -59,10 +60,10 @@ class FriendshipService {
   Future<bool> createFriendship(Friendship friendship) async {
     try {
       await supabase.from('friendships').insert(friendship.toJson());
-      print('Friendship created successfully');
+      LoggerService.info('Friendship created successfully');
       return true;
     } catch (error) {
-      print('Error creating friendship: $error');
+      LoggerService.error('Error creating friendship: $error');
       return false;
     }
   }
@@ -74,10 +75,10 @@ class FriendshipService {
           .from('friendships')
           .update(friendship.toJson())
           .eq('id', friendship.id);
-      print('Friendship updated successfully');
+      LoggerService.info('Friendship updated successfully');
       return true;
     } catch (error) {
-      print('Error updating friendship: $error');
+      LoggerService.error('Error updating friendship: $error');
       return false;
     }
   }
@@ -86,10 +87,10 @@ class FriendshipService {
   Future<bool> deleteFriendship(int id) async {
     try {
       await supabase.from('friendships').delete().eq('id', id);
-      print('Friendship deleted successfully');
+      LoggerService.info('Friendship deleted successfully');
       return true;
     } catch (error) {
-      print('Error deleting friendship: $error');
+      LoggerService.error('Error deleting friendship: $error');
       return false;
     }
   }

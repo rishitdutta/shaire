@@ -3,8 +3,8 @@ import 'package:provider/provider.dart';
 import '../providers/currency_provider.dart';
 import '../providers/friend_provider.dart'; // <-- Import
 import '../providers/group_provider.dart'; // <-- Import
-// Import detail screens if they exist, otherwise keep placeholders
 import '../widgets/friend_selection_widget.dart';
+import '../widgets/loading_spinner.dart';
 import 'friend_details_screen.dart';
 import 'group_details_screen.dart';
 
@@ -136,7 +136,10 @@ class _GroupsScreenState extends State<GroupsScreen>
                   if (friendProvider.isLoading &&
                       friendProvider.friends.isEmpty &&
                       friendProvider.pendingReceived.isEmpty) {
-                    return const Center(child: CircularProgressIndicator());
+                    return const LoadingSpinner(
+                      initialMessage: 'Loading friends...',
+                      wakeUpMessage: 'Please wait as the backend wakes up...',
+                    );
                   }
                   if (friendProvider.error != null) {
                     return Center(
@@ -147,7 +150,10 @@ class _GroupsScreenState extends State<GroupsScreen>
                 Consumer<GroupProvider>(
                     builder: (context, groupProvider, child) {
                   if (groupProvider.isLoading && groupProvider.groups.isEmpty) {
-                    return const Center(child: CircularProgressIndicator());
+                    return const LoadingSpinner(
+                      initialMessage: 'Loading groups...',
+                      wakeUpMessage: 'Please wait as the backend wakes up...',
+                    );
                   }
                   if (groupProvider.error != null) {
                     return Center(child: Text("Error: ${groupProvider.error}"));
@@ -165,7 +171,6 @@ class _GroupsScreenState extends State<GroupsScreen>
   // --- Modified Friends Tab ---
   Widget _buildFriendsTabContent(FriendProvider friendProvider) {
     final currencyProvider = Provider.of<CurrencyProvider>(context);
-    final Color secondaryColor = Theme.of(context).colorScheme.secondary;
     final Color primaryColor = Theme.of(context).colorScheme.primary;
     final Color onPrimaryColor = Theme.of(context).colorScheme.onPrimary;
 
@@ -196,7 +201,7 @@ class _GroupsScreenState extends State<GroupsScreen>
                 : ListView.builder(
                     padding: const EdgeInsets.only(bottom: 80),
                     itemCount: itemCount,
-                    itemBuilder: (context, index) {
+                    itemBuilder: (_, index) {
                       final item = displayItems[index];
                       final itemType = item['_type'];
 
@@ -226,9 +231,6 @@ class _GroupsScreenState extends State<GroupsScreen>
                                       color: Colors.green),
                                   //tooltip: 'Accept',
                                   onPressed: () async {
-                                    // Store reference to the context at the current scope
-                                    final currentContext = context;
-
                                     try {
                                       await friendProvider
                                           .respondToFriendRequest(
@@ -236,8 +238,7 @@ class _GroupsScreenState extends State<GroupsScreen>
 
                                       if (!mounted) return;
 
-                                      // Use the stored context reference
-                                      ScaffoldMessenger.of(currentContext)
+                                      ScaffoldMessenger.of(context)
                                           .showSnackBar(
                                         const SnackBar(
                                             content: Text(
@@ -246,8 +247,7 @@ class _GroupsScreenState extends State<GroupsScreen>
                                     } catch (e) {
                                       if (!mounted) return;
 
-                                      // Use the stored context reference
-                                      ScaffoldMessenger.of(currentContext)
+                                      ScaffoldMessenger.of(context)
                                           .showSnackBar(
                                         SnackBar(content: Text('Error: $e')),
                                       );
@@ -420,8 +420,6 @@ class _GroupsScreenState extends State<GroupsScreen>
   Widget _buildGroupsTabContent(GroupProvider groupProvider) {
     final Color primaryColor = Theme.of(context).colorScheme.primary;
     final Color onPrimaryColor = Theme.of(context).colorScheme.onPrimary;
-    final Color secondaryColor = Theme.of(context).colorScheme.secondary;
-    final Color onSecondaryColor = Theme.of(context).colorScheme.onSecondary;
 
     final List<Map<String, dynamic>> filteredGroups = groupProvider.groups
         .where((group) => (group['name'] ?? '')
@@ -503,13 +501,15 @@ class _GroupsScreenState extends State<GroupsScreen>
 
   void _showAddFriendDialog(FriendProvider friendProvider) {
     _addFriendController.clear();
-    final outer = context; // <— capture screen context
     bool isNameOnly = false;
+    bool isSubmitting = false;
+    String? errorMessage;
 
     showDialog(
-      context: outer,
+      context: context,
+      barrierDismissible: !isSubmitting,
       builder: (dialogCtx) => StatefulBuilder(
-        builder: (context, setDialogState) {
+        builder: (dCtx, setDialogState) {
           return AlertDialog(
             title: const Text('Add Friend'),
             content: Column(
@@ -530,17 +530,26 @@ class _GroupsScreenState extends State<GroupsScreen>
                     ),
                   ],
                   selected: {isNameOnly},
-                  onSelectionChanged: (newSelection) {
-                    setDialogState(() {
-                      isNameOnly = newSelection.first;
-                      _addFriendController.clear();
-                    });
-                  },
+                  onSelectionChanged: isSubmitting
+                      ? null
+                      : (newSelection) {
+                          setDialogState(() {
+                            isNameOnly = newSelection.first;
+                            _addFriendController.clear();
+                            errorMessage = null;
+                          });
+                        },
                 ),
                 const SizedBox(height: 16),
                 TextField(
                   controller: _addFriendController,
                   autofocus: true,
+                  enabled: !isSubmitting,
+                  onChanged: (_) {
+                    if (errorMessage != null) {
+                      setDialogState(() => errorMessage = null);
+                    }
+                  },
                   decoration: InputDecoration(
                     labelText:
                         isNameOnly ? "Friend's Name" : "Username or Email",
@@ -550,6 +559,7 @@ class _GroupsScreenState extends State<GroupsScreen>
                     helperText: isNameOnly
                         ? "Quickly add now, link to account later"
                         : null,
+                    errorText: errorMessage,
                     border: const OutlineInputBorder(),
                   ),
                 ),
@@ -557,37 +567,63 @@ class _GroupsScreenState extends State<GroupsScreen>
             ),
             actions: [
               TextButton(
-                onPressed: () => Navigator.pop(dialogCtx),
+                onPressed: isSubmitting ? null : () => Navigator.pop(dialogCtx),
                 child: const Text('CANCEL'),
               ),
               ElevatedButton(
-                onPressed: () async {
-                  final input = _addFriendController.text.trim();
-                  if (input.isEmpty) return;
+                onPressed: isSubmitting
+                    ? null
+                    : () async {
+                        final input = _addFriendController.text.trim();
+                        if (input.isEmpty) {
+                          setDialogState(() {
+                            errorMessage = isNameOnly
+                                ? 'Please enter a name'
+                                : 'Please enter a username or email';
+                          });
+                          return;
+                        }
 
-                  Navigator.pop(dialogCtx);
-                  try {
-                    if (isNameOnly) {
-                      await friendProvider.addCustomFriend(input);
-                      if (!mounted) return;
-                      ScaffoldMessenger.of(outer).showSnackBar(
-                        SnackBar(content: Text('Friend "$input" added!')),
-                      );
-                    } else {
-                      await friendProvider.sendFriendRequest(input);
-                      if (!mounted) return;
-                      ScaffoldMessenger.of(outer).showSnackBar(
-                        const SnackBar(content: Text('Friend request sent!')),
-                      );
-                    }
-                  } catch (e) {
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(outer).showSnackBar(
-                      SnackBar(content: Text('Error: ${e.toString()}')),
-                    );
-                  }
-                },
-                child: Text(isNameOnly ? 'ADD FRIEND' : 'SEND REQUEST'),
+                        setDialogState(() {
+                          isSubmitting = true;
+                          errorMessage = null;
+                        });
+
+                        try {
+                          if (isNameOnly) {
+                            await friendProvider.addCustomFriend(input);
+                            if (dialogCtx.mounted) Navigator.pop(dialogCtx);
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('Friend "$input" added!')),
+                              );
+                            }
+                          } else {
+                            await friendProvider.sendFriendRequest(input);
+                            if (dialogCtx.mounted) Navigator.pop(dialogCtx);
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                    content: Text('Friend request sent!')),
+                              );
+                            }
+                          }
+                        } catch (e) {
+                          setDialogState(() {
+                            isSubmitting = false;
+                            errorMessage = e
+                                .toString()
+                                .replaceFirst(RegExp(r'^Exception:\s*'), '');
+                          });
+                        }
+                      },
+                child: isSubmitting
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Text(isNameOnly ? 'ADD FRIEND' : 'SEND REQUEST'),
               ),
             ],
           );
@@ -599,108 +635,178 @@ class _GroupsScreenState extends State<GroupsScreen>
   void _showLinkFriendDialog(FriendProvider friendProvider,
       String customFriendId, String friendName) {
     final linkController = TextEditingController();
-    final outer = context;
+    bool isSubmitting = false;
+    String? errorMessage;
 
     showDialog(
-      context: outer,
-      builder: (dialogCtx) => AlertDialog(
-        title: Text('Connect $friendName'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Link $friendName to their Shaire account to sync shared expenses and balances.',
-              style: Theme.of(context).textTheme.bodyMedium,
+      context: context,
+      barrierDismissible: !isSubmitting,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (dCtx, setDialogState) {
+          return AlertDialog(
+            title: Text('Connect $friendName'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Link $friendName to their Shaire account to sync shared expenses and balances.',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: linkController,
+                  autofocus: true,
+                  enabled: !isSubmitting,
+                  onChanged: (_) {
+                    if (errorMessage != null) {
+                      setDialogState(() => errorMessage = null);
+                    }
+                  },
+                  decoration: InputDecoration(
+                    labelText: "Username or Email",
+                    hintText: "e.g. alex or alex@gmail.com",
+                    errorText: errorMessage,
+                    border: const OutlineInputBorder(),
+                    prefixIcon: const Icon(Icons.person_search),
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: linkController,
-              autofocus: true,
-              decoration: const InputDecoration(
-                labelText: "Username or Email",
-                hintText: "e.g. alex or alex@gmail.com",
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.person_search),
+            actions: [
+              TextButton(
+                onPressed: isSubmitting ? null : () => Navigator.pop(dialogCtx),
+                child: const Text('CANCEL'),
               ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogCtx),
-            child: const Text('CANCEL'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              final input = linkController.text.trim();
-              if (input.isEmpty) return;
+              ElevatedButton(
+                onPressed: isSubmitting
+                    ? null
+                    : () async {
+                        final input = linkController.text.trim();
+                        if (input.isEmpty) {
+                          setDialogState(() {
+                            errorMessage = 'Please enter a username or email';
+                          });
+                          return;
+                        }
 
-              Navigator.pop(dialogCtx);
-              try {
-                await friendProvider.linkCustomFriend(customFriendId, input);
-                if (!mounted) return;
-                ScaffoldMessenger.of(outer).showSnackBar(
-                  SnackBar(content: Text('$friendName connected to $input!')),
-                );
-              } catch (e) {
-                if (!mounted) return;
-                ScaffoldMessenger.of(outer).showSnackBar(
-                  SnackBar(content: Text('Error: ${e.toString()}')),
-                );
-              }
-            },
-            child: const Text('CONNECT'),
-          ),
-        ],
+                        setDialogState(() {
+                          isSubmitting = true;
+                          errorMessage = null;
+                        });
+
+                        try {
+                          await friendProvider.linkCustomFriend(
+                              customFriendId, input);
+                          if (dialogCtx.mounted) Navigator.pop(dialogCtx);
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                  content: Text('$friendName connected to $input!')),
+                            );
+                          }
+                        } catch (e) {
+                          setDialogState(() {
+                            isSubmitting = false;
+                            errorMessage = e
+                                .toString()
+                                .replaceFirst(RegExp(r'^Exception:\s*'), '');
+                          });
+                        }
+                      },
+                child: isSubmitting
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('CONNECT'),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
 
   void _showJoinGroupDialog(GroupProvider groupProvider) {
-    final outerCtx = context;
     _joinGroupController.clear();
+    bool isSubmitting = false;
+    String? errorMessage;
 
     showDialog(
-      context: outerCtx,
-      builder: (dialogCtx) => AlertDialog(
-        title: const Text('Join Group'),
-        content: TextField(
-          controller: _joinGroupController,
-          decoration: const InputDecoration(labelText: 'Invite Code'),
-          autofocus: true,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogCtx),
-            child: const Text('CANCEL'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              final code = _joinGroupController.text.trim();
-              if (code.isEmpty) {
-                ScaffoldMessenger.of(outerCtx).showSnackBar(
-                  const SnackBar(content: Text('Please enter an invite code')),
-                );
-                return;
-              }
-              Navigator.pop(dialogCtx);
-              try {
-                await groupProvider.joinGroup(code);
-                if (!mounted) return;
-                ScaffoldMessenger.of(outerCtx).showSnackBar(
-                  const SnackBar(content: Text('Joined group successfully!')),
-                );
-              } catch (e) {
-                if (!mounted) return;
-                ScaffoldMessenger.of(outerCtx).showSnackBar(
-                  SnackBar(content: Text('Error joining group: $e')),
-                );
-              }
-            },
-            child: const Text('JOIN'),
-          ),
-        ],
+      context: context,
+      barrierDismissible: !isSubmitting,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (dCtx, setDialogState) {
+          return AlertDialog(
+            title: const Text('Join Group'),
+            content: TextField(
+              controller: _joinGroupController,
+              decoration: InputDecoration(
+                labelText: 'Invite Code',
+                errorText: errorMessage,
+                border: const OutlineInputBorder(),
+              ),
+              autofocus: true,
+              enabled: !isSubmitting,
+              onChanged: (_) {
+                if (errorMessage != null) {
+                  setDialogState(() => errorMessage = null);
+                }
+              },
+            ),
+            actions: [
+              TextButton(
+                onPressed: isSubmitting ? null : () => Navigator.pop(dialogCtx),
+                child: const Text('CANCEL'),
+              ),
+              ElevatedButton(
+                onPressed: isSubmitting
+                    ? null
+                    : () async {
+                        final code = _joinGroupController.text.trim();
+                        if (code.isEmpty) {
+                          setDialogState(() {
+                            errorMessage = 'Please enter an invite code';
+                          });
+                          return;
+                        }
+
+                        setDialogState(() {
+                          isSubmitting = true;
+                          errorMessage = null;
+                        });
+
+                        try {
+                          await groupProvider.joinGroup(code);
+                          if (dialogCtx.mounted) Navigator.pop(dialogCtx);
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                  content: Text('Joined group successfully!')),
+                            );
+                          }
+                        } catch (e) {
+                          setDialogState(() {
+                            isSubmitting = false;
+                            errorMessage = e
+                                .toString()
+                                .replaceFirst(RegExp(r'^Exception:\s*'), '');
+                          });
+                        }
+                      },
+                child: isSubmitting
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('JOIN'),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -708,81 +814,115 @@ class _GroupsScreenState extends State<GroupsScreen>
   void _showCreateGroupDialog(GroupProvider groupProvider) {
     _createGroupController.clear();
     List<String> selectedFriends = [];
-    final outer = context;
+    bool isSubmitting = false;
+    String? errorMessage;
 
     showDialog(
-      context: outer,
-      builder: (dialogCtx) => AlertDialog(
-        title: const Text('Create Group'),
-        content: SizedBox(
-          width: double.maxFinite,
-          height: 400,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: _createGroupController,
-                decoration: const InputDecoration(labelText: 'Group Name'),
-                autofocus: true,
+      context: context,
+      barrierDismissible: !isSubmitting,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (dCtx, setDialogState) {
+          return AlertDialog(
+            title: const Text('Create Group'),
+            content: SizedBox(
+              width: double.maxFinite,
+              height: 400,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: _createGroupController,
+                    enabled: !isSubmitting,
+                    onChanged: (_) {
+                      if (errorMessage != null) {
+                        setDialogState(() => errorMessage = null);
+                      }
+                    },
+                    decoration: InputDecoration(
+                      labelText: 'Group Name',
+                      errorText: errorMessage,
+                    ),
+                    autofocus: true,
+                  ),
+                  const SizedBox(height: 16),
+                  const Text('Add friends to group:',
+                      style: TextStyle(fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: FriendSelectionWidget(
+                      onSelectionChanged: isSubmitting
+                          ? (_) {}
+                          : (selectedIds) {
+                              selectedFriends = selectedIds;
+                            },
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 16),
-              const Text('Add friends to group:',
-                  style: TextStyle(fontWeight: FontWeight.bold)),
-              const SizedBox(height: 8),
-              Expanded(
-                child: FriendSelectionWidget(
-                  onSelectionChanged: (selectedIds) {
-                    selectedFriends = selectedIds;
-                  },
-                ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: isSubmitting ? null : () => Navigator.pop(dialogCtx),
+                child: const Text('CANCEL'),
+              ),
+              ElevatedButton(
+                onPressed: isSubmitting
+                    ? null
+                    : () async {
+                        final name = _createGroupController.text.trim();
+                        if (name.isEmpty) {
+                          setDialogState(() {
+                            errorMessage = 'Please enter a group name';
+                          });
+                          return;
+                        }
+
+                        setDialogState(() {
+                          isSubmitting = true;
+                          errorMessage = null;
+                        });
+
+                        try {
+                          final groupId =
+                              await groupProvider.createGroup(name, null);
+
+                          if (selectedFriends.isNotEmpty) {
+                            await groupProvider.addMembersToGroup(
+                                groupId, selectedFriends);
+                          }
+
+                          if (dialogCtx.mounted) Navigator.pop(dialogCtx);
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  selectedFriends.isNotEmpty
+                                      ? 'Group created with ${selectedFriends.length} members!'
+                                      : 'Group created successfully!',
+                                ),
+                              ),
+                            );
+                          }
+                        } catch (e) {
+                          setDialogState(() {
+                            isSubmitting = false;
+                            errorMessage = e
+                                .toString()
+                                .replaceFirst(RegExp(r'^Exception:\s*'), '');
+                          });
+                        }
+                      },
+                child: isSubmitting
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('CREATE'),
               ),
             ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogCtx),
-            child: const Text('CANCEL'),
-          ),
-          // In your _showCreateGroupDialog method:
-          ElevatedButton(
-            onPressed: () async {
-              final name = _createGroupController.text;
-              if (name.trim().isEmpty) {
-                ScaffoldMessenger.of(outer).showSnackBar(
-                  const SnackBar(content: Text('Please enter a group name')),
-                );
-                return;
-              }
-
-              Navigator.pop(dialogCtx);
-              try {
-                // Create group first
-                final groupId = await groupProvider.createGroup(name, null);
-
-                // Add selected friends to the group (this was the issue)
-                if (selectedFriends.isNotEmpty) {
-                  await groupProvider.addMembersToGroup(
-                      groupId, selectedFriends);
-
-                  // Show success toast
-                  if (!mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                        content: Text(
-                            'Group created with ${selectedFriends.length} members!')),
-                  );
-                }
-              } catch (e) {
-                if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Error: $e')),
-                );
-              }
-            },
-            child: const Text('CREATE'),
-          ),
-        ],
+          );
+        },
       ),
     );
   }

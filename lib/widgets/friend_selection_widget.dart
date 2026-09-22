@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/friend_provider.dart';
+import '../services/logger_service.dart';
 
 class FriendSelectionWidget extends StatefulWidget {
   final List<String> initialSelectedIds;
@@ -44,12 +45,6 @@ class _FriendSelectionWidgetState extends State<FriendSelectionWidget> {
     return Consumer<FriendProvider>(
       builder: (context, friendProvider, child) {
         final friends = friendProvider.friends;
-        print('Available friends: ${friends.length}'); // Debug friends count
-
-        // Print friend fields to see the structure
-        if (friends.isNotEmpty) {
-          print('First friend data: ${friends.first}');
-        }
 
         final filteredFriends = friends.where((friend) {
           final name =
@@ -83,9 +78,6 @@ class _FriendSelectionWidgetState extends State<FriendSelectionWidget> {
                       friend['user_id']?.toString() ??
                       '';
 
-                  print(
-                      'Friend ID: $friendId for ${friend['full_name'] ?? friend['username']}');
-
                   final isSelected = _selectedFriendIds.contains(friendId);
 
                   return CheckboxListTile(
@@ -96,11 +88,11 @@ class _FriendSelectionWidgetState extends State<FriendSelectionWidget> {
                       setState(() {
                         if (isChecked == true) {
                           _selectedFriendIds.add(friendId);
-                          print(
+                          LoggerService.debug(
                               'Added friend: $friendId, total selected: ${_selectedFriendIds.length}');
                         } else {
                           _selectedFriendIds.remove(friendId);
-                          print(
+                          LoggerService.debug(
                               'Removed friend: $friendId, total selected: ${_selectedFriendIds.length}');
                         }
                         widget.onSelectionChanged(_selectedFriendIds.toList());

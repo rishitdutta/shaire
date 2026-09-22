@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shaire/providers/prediction_provider.dart';
 import '../providers/currency_provider.dart';
-import 'package:fl_chart/fl_chart.dart';
+import '../widgets/weekly_spending_chart.dart';
+import '../widgets/category_breakdown_list.dart';
+import '../widgets/loading_spinner.dart';
 import '../database/expense.dart';
 import '../providers/expense_provider.dart';
 import 'package:intl/intl.dart';
@@ -245,7 +247,11 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: const Padding(
           padding: EdgeInsets.all(16.0),
-          child: Center(child: CircularProgressIndicator()),
+          child: LoadingSpinner(
+            compact: true,
+            initialMessage: 'Generating AI spending forecast...',
+            wakeUpMessage: 'Please wait as the AI backend wakes up...',
+          ),
         ),
       );
     }
@@ -483,7 +489,10 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
 
     return Scaffold(
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
+          ? const LoadingSpinner(
+              initialMessage: 'Loading expenses & analytics...',
+              wakeUpMessage: 'Please wait as the backend wakes up...',
+            )
           : RefreshIndicator(
               onRefresh: _refreshWithForcedUpdate, // Use new refresh method
               child: SingleChildScrollView(
@@ -494,12 +503,21 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                     children: [
                       _buildExpenseChangeSummary(context, currencyProvider),
                       const SizedBox(height: 16),
-                      _buildExpensesGraph(context, currencyProvider),
+                      WeeklySpendingChart(
+                        weeklyExpensesData: _weeklyExpensesData,
+                        weekLabels: _weekLabels,
+                        currentWeekIndex: _currentWeekIndex,
+                        maxExpense: _maxChartExpense,
+                        currencyProvider: currencyProvider,
+                      ),
                       const SizedBox(height: 24),
                       _buildPredictions(
-                          context, currencyProvider), // Add this line
+                          context, currencyProvider),
                       const SizedBox(height: 24),
-                      _buildCategoryBreakdown(context, currencyProvider),
+                      CategoryBreakdownList(
+                        categories: _cachedCategories,
+                        currencyProvider: currencyProvider,
+                      ),
                       const SizedBox(height: 24),
                       _buildAIInsights(context),
                       const SizedBox(height: 24),
@@ -509,175 +527,6 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                 ),
               ),
             ),
-    );
-  }
-
-  // Update the expense graph to use real data
-  Widget _buildExpensesGraph(
-      BuildContext context, CurrencyProvider currencyProvider) {
-    final maxExpense = _maxChartExpense;
-
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8.0),
-              child: Text(
-                'Weekly Spending',
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-            ),
-            const SizedBox(height: 24),
-            SizedBox(
-              height: 200,
-              child: _weeklyExpensesData.isEmpty
-                  ? const Center(child: Text('No expense data available'))
-                  : Padding(
-                      padding: const EdgeInsets.only(right: 8.0),
-                      child: BarChart(
-                        BarChartData(
-                          alignment: BarChartAlignment.spaceAround,
-                          maxY: maxExpense,
-                          barTouchData: BarTouchData(
-                            enabled: true,
-                            touchTooltipData: BarTouchTooltipData(
-                              getTooltipColor: (spot) => Colors.blueGrey,
-                              getTooltipItem:
-                                  (group, groupIndex, rod, rodIndex) {
-                                return BarTooltipItem(
-                                  currencyProvider.format(rod.toY),
-                                  const TextStyle(color: Colors.white),
-                                );
-                              },
-                            ),
-                          ),
-                          titlesData: FlTitlesData(
-                            show: true,
-                            bottomTitles: AxisTitles(
-                              sideTitles: SideTitles(
-                                showTitles: true,
-                                getTitlesWidget: (value, meta) {
-                                  if (value < 0 ||
-                                      value >= _weekLabels.length) {
-                                    return const Text('');
-                                  }
-                                  return Padding(
-                                    padding: const EdgeInsets.only(top: 8.0),
-                                    child: Text(
-                                      _weekLabels[value.toInt()],
-                                      style: const TextStyle(fontSize: 10),
-                                    ),
-                                  );
-                                },
-                                reservedSize: 35,
-                              ),
-                            ),
-                            leftTitles: const AxisTitles(
-                              sideTitles: SideTitles(showTitles: false),
-                            ),
-                            topTitles: const AxisTitles(
-                              sideTitles: SideTitles(showTitles: false),
-                            ),
-                            rightTitles: const AxisTitles(
-                              sideTitles: SideTitles(showTitles: false),
-                            ),
-                          ),
-                          borderData: FlBorderData(show: false),
-                          barGroups: _weeklyExpensesData[0]
-                              .asMap()
-                              .entries
-                              .map((entry) {
-                            final index = entry.key;
-                            final value = entry.value;
-                            return BarChartGroupData(
-                              x: index,
-                              barRods: [
-                                BarChartRodData(
-                                  toY: value,
-                                  color: _getBarColor(context, index),
-                                  width: 18,
-                                  borderRadius: const BorderRadius.only(
-                                    topLeft: Radius.circular(4),
-                                    topRight: Radius.circular(4),
-                                  ),
-                                ),
-                              ],
-                            );
-                          }).toList(),
-                        ),
-                      ),
-                    ),
-            ),
-            const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                _buildLegendItem(
-                  context,
-                  Theme.of(context).colorScheme.primary,
-                  'Past weeks',
-                ),
-                const SizedBox(width: 24),
-                _buildLegendItem(
-                  context,
-                  Theme.of(context).colorScheme.primary.withValues(alpha: 0.8),
-                  'This week',
-                ),
-                const SizedBox(width: 24),
-                _buildLegendItem(
-                  context,
-                  Colors.grey.shade400,
-                  'Projected',
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildCategoryBreakdown(
-      BuildContext context, CurrencyProvider currencyProvider) {
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Category Breakdown',
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
-            const SizedBox(height: 16),
-            _cachedCategories.isEmpty
-                ? const Center(child: Text('No expense data available'))
-                : Column(
-                    children: _cachedCategories
-                        .map((category) => _buildCategoryItem(
-                              context,
-                              currencyProvider,
-                              category['name'] as String,
-                              category['amount'] as double,
-                              category['percent'] as int,
-                              category['icon'] as IconData,
-                            ))
-                        .toList(),
-                  ),
-          ],
-        ),
-      ),
     );
   }
 
@@ -732,41 +581,6 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
           ],
         ),
       ),
-    );
-  }
-
-  Color _getBarColor(BuildContext context, int index) {
-    // Current week (highlighted)
-    if (index == _currentWeekIndex) {
-      return Theme.of(context).colorScheme.primary.withValues(alpha: 0.8);
-    }
-    // Past weeks
-    else if (index < _currentWeekIndex) {
-      return Theme.of(context).colorScheme.primary;
-    }
-    // Future projections
-    else {
-      return Colors.grey.shade400;
-    }
-  }
-
-  Widget _buildLegendItem(BuildContext context, Color color, String label) {
-    return Row(
-      children: [
-        Container(
-          width: 12,
-          height: 12,
-          decoration: BoxDecoration(
-            color: color,
-            borderRadius: BorderRadius.circular(2),
-          ),
-        ),
-        const SizedBox(width: 6),
-        Text(
-          label,
-          style: Theme.of(context).textTheme.bodySmall,
-        ),
-      ],
     );
   }
 
@@ -1021,110 +835,4 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
         return Icons.category;
     }
   }
-
-  Widget _buildCategoryItem(
-      BuildContext context,
-      CurrencyProvider currencyProvider,
-      String name,
-      double amount,
-      int percent,
-      IconData icon) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12.0),
-      child: Row(
-        children: [
-          Container(
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            padding: const EdgeInsets.all(8),
-            child: Icon(
-              icon,
-              size: 20,
-              color: Theme.of(context).colorScheme.primary,
-            ),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            flex: 3,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(name),
-                    Text(currencyProvider.format(amount)),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
-                  child: LinearProgressIndicator(
-                    value: percent / 100,
-                    backgroundColor:
-                        Theme.of(context).colorScheme.surfaceContainerHighest,
-                    valueColor: AlwaysStoppedAnimation<Color>(
-                      Theme.of(context)
-                          .colorScheme
-                          .primary
-                          .withValues(alpha: 0.7 + (0.3 * percent / 100)),
-                    ),
-                    minHeight: 6,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          SizedBox(
-            width: 40,
-            child: Text(
-              '$percent%',
-              textAlign: TextAlign.end,
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                color: Theme.of(context).colorScheme.primary,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Helper variables
-  List<Map<String, dynamic>> get categories => [
-        {
-          'name': 'Food & Drinks',
-          'amount': 5240.0,
-          'percent': 32,
-          'icon': Icons.restaurant
-        },
-        {
-          'name': 'Transportation',
-          'amount': 2150.0,
-          'percent': 13,
-          'icon': Icons.directions_car
-        },
-        {
-          'name': 'Entertainment',
-          'amount': 3420.0,
-          'percent': 21,
-          'icon': Icons.movie
-        },
-        {
-          'name': 'Shopping',
-          'amount': 4100.0,
-          'percent': 25,
-          'icon': Icons.shopping_bag
-        },
-        {
-          'name': 'Others',
-          'amount': 1470.0,
-          'percent': 9,
-          'icon': Icons.more_horiz
-        },
-      ];
 }

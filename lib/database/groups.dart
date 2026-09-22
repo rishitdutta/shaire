@@ -1,4 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../services/logger_service.dart';
 
 class Group {
   final int id;
@@ -54,7 +55,7 @@ class GroupService {
 
       return Group.fromJson(response);
     } catch (error) {
-      print('Error fetching group: $error');
+      LoggerService.error('Error fetching group: $error');
       return null;
     }
   }
@@ -63,10 +64,10 @@ class GroupService {
   Future<bool> createGroup(Group group) async {
     try {
       await supabase.from('groups').insert(group.toJson());
-      print('Group created successfully');
+      LoggerService.info('Group created successfully');
       return true;
     } catch (error) {
-      print('Error creating group: $error');
+      LoggerService.error('Error creating group: $error');
       return false;
     }
   }
@@ -78,10 +79,10 @@ class GroupService {
           .from('groups')
           .update(group.toJson())
           .eq('id', group.id);
-      print('Group updated successfully');
+      LoggerService.info('Group updated successfully');
       return true;
     } catch (error) {
-      print('Error updating group: $error');
+      LoggerService.error('Error updating group: $error');
       return false;
     }
   }
@@ -90,10 +91,10 @@ class GroupService {
   Future<bool> deleteGroup(int id) async {
     try {
       await supabase.from('groups').delete().eq('id', id);
-      print('Group deleted successfully');
+      LoggerService.info('Group deleted successfully');
       return true;
     } catch (error) {
-      print('Error deleting group: $error');
+      LoggerService.error('Error deleting group: $error');
       return false;
     }
   }

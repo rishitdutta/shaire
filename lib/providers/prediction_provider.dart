@@ -130,7 +130,6 @@ class PredictionProvider with ChangeNotifier {
         }
       }
 
-      _isLoading = false;
       _lastFetchTime = DateTime.now();
       _isLoading = false;
 
@@ -141,7 +140,7 @@ class PredictionProvider with ChangeNotifier {
     } catch (e) {
       LoggerService.error('Error fetching predictions', e);
       _hasError = true;
-      _errorMessage = e.toString();
+      _errorMessage = 'Could not reach prediction service. Please pull to refresh to try again.';
       _isLoading = false;
       notifyListeners();
     }

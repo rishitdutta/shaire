@@ -55,13 +55,13 @@ class ReceiptService {
           .maybeSingle();
 
       if (response == null) {
-        print('No receipt found for ID: $id');
+        LoggerService.warning('No receipt found for ID: $id');
         return null;
       }
 
       return Receipt.fromJson(response);
     } catch (error) {
-      print('Error fetching receipt: $error');
+      LoggerService.error('Error fetching receipt: $error');
       return null;
     }
   }
@@ -70,10 +70,10 @@ class ReceiptService {
   Future<bool> createReceipt(Receipt receipt) async {
     try {
       await supabase.from('receipts').insert(receipt.toJson());
-      print('Receipt created successfully');
+      LoggerService.info('Receipt created successfully');
       return true;
     } catch (error) {
-      print('Error creating receipt: $error');
+      LoggerService.error('Error creating receipt: $error');
       return false;
     }
   }
@@ -86,10 +86,10 @@ class ReceiptService {
           .update(receipt.toJson())
           .eq('id', receipt.id);
 
-      print('Receipt updated successfully');
+      LoggerService.info('Receipt updated successfully');
       return true;
     } catch (error) {
-      print('Error updating receipt: $error');
+      LoggerService.error('Error updating receipt: $error');
       return false;
     }
   }
@@ -98,10 +98,10 @@ class ReceiptService {
   Future<bool> deleteReceipt(int id) async {
     try {
       await supabase.from('receipts').delete().eq('id', id);
-      print('Receipt deleted successfully');
+      LoggerService.info('Receipt deleted successfully');
       return true;
     } catch (error) {
-      print('Error deleting receipt: $error');
+      LoggerService.error('Error deleting receipt: $error');
       return false;
     }
   }
@@ -161,9 +161,9 @@ class ReceiptService {
     } on StorageException catch (e) {
       LoggerService.error('Storage error during upload', e);
 
-      if (e.statusCode == 413) {
+      if (e.statusCode == '413') {
         throw Exception('Image too large. Compress below 50MB');
-      } else if (e.statusCode == 404) {
+      } else if (e.statusCode == '404') {
         throw Exception('Storage configuration error');
       }
       rethrow;

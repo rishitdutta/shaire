@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'dart:io';
 
+import 'logger_service.dart';
+
 class BillService {
   final String baseUrl = "https://shaire-backend.vercel.app";
 
@@ -17,11 +19,11 @@ class BillService {
         imageFile.path,
       ));
 
-      // Send the request
-      var response = await request.send();
+      // Send the request with 90s timeout
+      var response = await request.send().timeout(const Duration(seconds: 90));
 
       // Get the response
-      var responseData = await response.stream.bytesToString();
+      var responseData = await response.stream.bytesToString().timeout(const Duration(seconds: 30));
 
       if (response.statusCode == 200) {
         return json.decode(responseData);
@@ -36,15 +38,15 @@ class BillService {
   // Health check to verify server is running
   Future<bool> checkServerHealth() async {
     try {
-      print('Checking server health at: ${Uri.parse('$baseUrl/health')}');
+      LoggerService.debug('Checking server health at: ${Uri.parse('$baseUrl/health')}');
       final response = await http
           .get(Uri.parse('$baseUrl/health'))
           .timeout(const Duration(seconds: 10)); // Add timeout
-      print(
+      LoggerService.debug(
           'Server health response: ${response.statusCode}, Body: ${response.body}');
       return response.statusCode == 200;
     } catch (e) {
-      print('Server health check failed with error: $e');
+      LoggerService.error('Server health check failed with error: $e');
       return false;
     }
   }

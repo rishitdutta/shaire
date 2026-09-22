@@ -1,5 +1,7 @@
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'dart:async';
+import 'dart:io';
 import '../database/expense.dart';
 import 'logger_service.dart';
 
@@ -46,12 +48,56 @@ class DailyPrediction {
 class PredictionService {
   static const String _baseUrl =
       'https://shaire-backend-render-python.onrender.com';
+  static const Duration _timeout = Duration(seconds: 90);
+  static const int _maxRetries = 3;
+
+  static Future<http.Response> _postWithRetry(
+    Uri uri, {
+    required Map<String, String> headers,
+    required String body,
+  }) async {
+    for (int attempt = 1; attempt <= _maxRetries; attempt++) {
+      try {
+        LoggerService.info('POST $uri (attempt $attempt/$_maxRetries)');
+        final response = await http
+            .post(uri, headers: headers, body: body)
+            .timeout(_timeout);
+
+        if (response.statusCode == 200) {
+          return response;
+        }
+
+        if ((response.statusCode == 502 || response.statusCode == 503) &&
+            attempt < _maxRetries) {
+          LoggerService.warning(
+              'Backend waking up (HTTP ${response.statusCode}), retrying in 3s...');
+          await Future.delayed(const Duration(seconds: 3));
+          continue;
+        }
+
+        return response;
+      } on SocketException catch (e) {
+        LoggerService.warning('Socket error on attempt $attempt: $e');
+        if (attempt >= _maxRetries) rethrow;
+        await Future.delayed(Duration(seconds: attempt * 2));
+      } on http.ClientException catch (e) {
+        LoggerService.warning('Client connection error on attempt $attempt: $e');
+        if (attempt >= _maxRetries) rethrow;
+        await Future.delayed(Duration(seconds: attempt * 2));
+      } on TimeoutException catch (e) {
+        LoggerService.warning('Request timed out on attempt $attempt: $e');
+        if (attempt >= _maxRetries) rethrow;
+        await Future.delayed(Duration(seconds: attempt * 2));
+      }
+    }
+    throw Exception('Failed to connect to backend after $_maxRetries attempts');
+  }
 
   // Get predictions using simple average spending approach
   static Future<PredictionResponse> getPredictionsSimple(
       double avgSpending) async {
     try {
-      final response = await http.post(
+      final response = await _postWithRetry(
         Uri.parse('$_baseUrl/predict_spending_simple'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'avg_spending': avgSpending, 'prediction_days': 30}),
@@ -81,7 +127,7 @@ class PredictionService {
               })
           .toList();
 
-      final response = await http.post(
+      final response = await _postWithRetry(
         Uri.parse('$_baseUrl/predict_spending'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'transactions': transactions, 'prediction_days': 30}),

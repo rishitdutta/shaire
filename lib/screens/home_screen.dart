@@ -2,11 +2,11 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shaire/providers/expense_provider.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import '../providers/currency_provider.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/logger_service.dart';
+import '../widgets/loading_spinner.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -51,63 +51,15 @@ class _HomeScreenState extends State<HomeScreen>
     setState(() => _isLoading = true);
 
     try {
-      final user = Supabase.instance.client.auth.currentUser;
-      if (user == null) return;
-
-      // Fetch balances
-      final balancesResponse = await Supabase.instance.client
-          .from('balances')
-          .select('*')
-          .or('from_user_id.eq.${user.id},to_user_id.eq.${user.id}');
-
-      double getTotalAmount = 0;
-      double oweTotalAmount = 0;
-
-      if (balancesResponse.isNotEmpty) {
-        for (var balance in balancesResponse) {
-          final double amount = (balance['amount'] as num).toDouble();
-          if (balance['from_user_id'] == user.id) {
-            if (amount > 0) {
-              getTotalAmount += amount;
-            } else {
-              oweTotalAmount += -amount;
-            }
-          } else {
-            if (amount > 0) {
-              oweTotalAmount += amount;
-            } else {
-              getTotalAmount += -amount;
-            }
-          }
-        }
-      } else {
-        // Fallback: Compute totals dynamically from unsettled expense_participants
-        final myParticipants = await Supabase.instance.client
-            .from('expense_participants')
-            .select('share_amount, paid_amount, settled')
-            .eq('user_id', user.id)
-            .eq('settled', false);
-
-        for (var p in myParticipants) {
-          final paid = (p['paid_amount'] as num).toDouble();
-          final share = (p['share_amount'] as num).toDouble();
-          if (paid > share) {
-            getTotalAmount += (paid - share);
-          } else if (share > paid) {
-            oweTotalAmount += (share - paid);
-          }
-        }
-      }
-
-      // Fetch recent activities (use expenses for now)
       final expenseProvider =
           Provider.of<ExpenseProvider>(context, listen: false);
+      final balances = await expenseProvider.fetchUserOverallBalances();
       await expenseProvider.fetchExpenses();
 
       if (!mounted) return;
       setState(() {
-        _youGet = getTotalAmount;
-        _youOwe = oweTotalAmount;
+        _youGet = balances['youGet'] ?? 0.0;
+        _youOwe = balances['youOwe'] ?? 0.0;
         _isLoading = false;
       });
     } catch (e) {
@@ -335,8 +287,7 @@ class _HomeScreenState extends State<HomeScreen>
       if (_hiddenActivityIds.contains(expenseId)) continue;
 
       final dateKey = _formatDateKey(expense.date);
-      final user = Supabase.instance.client.auth.currentUser;
-      final isMyExpense = expense.createdBy == user?.id;
+      final isMyExpense = expense.createdBy == expenseProvider.currentUserId;
 
       if (!groupedActivities.containsKey(dateKey)) {
         groupedActivities[dateKey] = [];
@@ -429,6 +380,7 @@ class _HomeScreenState extends State<HomeScreen>
                     _hiddenActivityIds.add(item['id']);
                   });
                   await _saveHiddenActivityIds();
+                  if (!context.mounted) return;
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
                         content: Text('Removed from recent activity')),
@@ -466,6 +418,7 @@ class _HomeScreenState extends State<HomeScreen>
                         _hiddenActivityIds.add(item['id']);
                       });
                       await _saveHiddenActivityIds();
+                      if (!context.mounted) return;
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
                             content: Text('Removed from recent activity')),
@@ -570,12 +523,22 @@ class _HomeScreenState extends State<HomeScreen>
 
   @override
   Widget build(BuildContext context) {
-    return WillPopScope(
-      onWillPop: _onWillPop,
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        final shouldExit = await _onWillPop();
+        if (shouldExit) {
+          exit(0);
+        }
+      },
       child: Scaffold(
         body: SafeArea(
           child: _isLoading
-              ? const Center(child: CircularProgressIndicator())
+              ? const LoadingSpinner(
+                  initialMessage: 'Loading dashboard...',
+                  wakeUpMessage: 'Please wait as the backend wakes up...',
+                )
               : RefreshIndicator(
                   onRefresh: _fetchData,
                   child: Column(

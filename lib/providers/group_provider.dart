@@ -1,26 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:logger/logger.dart';
+import '../services/logger_service.dart';
 
 class GroupProvider with ChangeNotifier {
   final SupabaseClient _supabase = Supabase.instance.client;
-  final Logger _logger = Logger(
-    printer: PrettyPrinter(
-      methodCount: 0,
-      errorMethodCount: 5,
-      lineLength: 50,
-      colors: true,
-      printEmojis: true,
-      printTime: true,
-    ),
-  );
 
   List<Map<String, dynamic>> _groups = [];
   bool _isLoading = false;
+  bool _hasFetched = false;
   String? _error;
 
   List<Map<String, dynamic>> get groups => _groups;
-  bool get isLoading => _isLoading;
+  bool get isLoading => _isLoading || !_hasFetched;
   String? get error => _error;
 
   String? get currentUserId => _supabase.auth.currentUser?.id;
@@ -30,8 +21,7 @@ class GroupProvider with ChangeNotifier {
 
     _isLoading = true;
     _error = null;
-    // Consider removing immediate notifyListeners if it causes build errors
-    // notifyListeners();
+    notifyListeners();
 
     try {
       // Fetch group IDs the user is a member of
@@ -69,12 +59,13 @@ class GroupProvider with ChangeNotifier {
       } else {
         _groups = [];
       }
-
+      _hasFetched = true;
       _isLoading = false;
       notifyListeners();
     } catch (e) {
-      print("Error fetching groups: $e");
+      LoggerService.error("Error fetching groups: $e");
       _error = "Failed to load groups data: ${e.toString()}";
+      _hasFetched = true;
       _isLoading = false;
       notifyListeners();
     }
@@ -88,8 +79,8 @@ class GroupProvider with ChangeNotifier {
     _error = null;
     notifyListeners();
 
-    _logger.i("Creating group: $name");
-    _logger.d("Description: ${description ?? '<none>'}");
+    LoggerService.info("Creating group: $name");
+    LoggerService.debug("Description: ${description ?? '<none>'}");
 
     try {
       final insertRes = await _supabase
@@ -103,7 +94,7 @@ class GroupProvider with ChangeNotifier {
           .single();
       final newGroupId = insertRes['id'] as int;
 
-      _logger.i("Created group with ID: $newGroupId");
+      LoggerService.info("Created group with ID: $newGroupId");
 
       // add creator as admin
       await _supabase.from('group_members').insert({
@@ -111,12 +102,12 @@ class GroupProvider with ChangeNotifier {
         'user_id': currentUserId!,
         'role': 'admin',
       });
-      _logger.i("Added creator $currentUserId as admin to $newGroupId");
+      LoggerService.info("Added creator $currentUserId as admin to $newGroupId");
 
       await fetchGroups();
       return newGroupId;
     } catch (e, st) {
-      _logger.e("Failed to create group", error: e, stackTrace: st);
+      LoggerService.error("Failed to create group", e, st);
       _error = e.toString();
       rethrow;
     } finally {
@@ -147,16 +138,16 @@ class GroupProvider with ChangeNotifier {
               })
           .toList();
 
-      _logger.d('Adding ${membersToAdd.length} members to group $groupId');
+      LoggerService.debug('Adding ${membersToAdd.length} members to group $groupId');
 
       // Insert into group_members table
       await _supabase.from('group_members').insert(membersToAdd);
-      _logger.i('Successfully added members to group $groupId');
+      LoggerService.info('Successfully added members to group $groupId');
 
       await fetchGroups(); // Refresh the groups data
     } catch (e) {
       _error = e.toString();
-      _logger.e('Error adding members: $_error');
+      LoggerService.error('Error adding members: $_error', e);
       notifyListeners();
       rethrow;
     } finally {
@@ -174,7 +165,7 @@ class GroupProvider with ChangeNotifier {
     notifyListeners();
 
     try {
-      _logger.d('Joining group with code: "${inviteCode.trim()}"');
+      LoggerService.debug('Joining group with code: "${inviteCode.trim()}"');
 
       final results = await _supabase
           .from('groups')
@@ -186,7 +177,7 @@ class GroupProvider with ChangeNotifier {
       }
 
       final groupId = results[0]['id'];
-      _logger.d('Found group with ID: $groupId');
+      LoggerService.debug('Found group with ID: $groupId');
 
       final existingCheck = await _supabase
           .from('group_members')
@@ -204,11 +195,11 @@ class GroupProvider with ChangeNotifier {
         'role': 'member',
       });
 
-      _logger.i('Successfully joined group with ID: $groupId');
+      LoggerService.info('Successfully joined group with ID: $groupId');
       await fetchGroups();
     } catch (e) {
       _error = e.toString();
-      _logger.e('Error joining group: $_error');
+      LoggerService.error('Error joining group: $_error', e);
       rethrow;
     } finally {
       _isLoading = false;
@@ -216,5 +207,144 @@ class GroupProvider with ChangeNotifier {
     }
   }
 
-  // Add fetchGroupMembers, addMember, leaveGroup etc. as needed for details screen
+  /// Fetch full details for a group: info, members with profiles, activities, and pairwise balances
+  Future<Map<String, dynamic>> fetchGroupDetails(int groupId) async {
+    final userId = currentUserId;
+
+    // 1. Fetch group info
+    final groupRes = await _supabase
+        .from('groups')
+        .select('name, invite_code, created_by')
+        .eq('id', groupId)
+        .single();
+
+    final groupName = groupRes['name'] as String?;
+    final inviteCode = groupRes['invite_code'] as String?;
+    final createdById = groupRes['created_by'] as String?;
+
+    // 2. Fetch members with profiles
+    final membersRes = await _supabase
+        .from('group_members')
+        .select(
+            'user_id, role, joined_at, profiles:user_id(username, full_name, avatar_url)')
+        .eq('group_id', groupId);
+
+    final List<Map<String, dynamic>> members = [];
+    for (final m in membersRes) {
+      final profile = m['profiles'] ?? {};
+      members.add({
+        'user_id': m['user_id'],
+        'role': m['role'],
+        'joined_at': m['joined_at'],
+        'username': profile['username'],
+        'full_name': profile['full_name'],
+        'avatar_url': profile['avatar_url'],
+      });
+    }
+
+    // 3. Fetch expenses
+    final expensesRes = await _supabase
+        .from('expenses')
+        .select('''
+        id, description, total_amount, date, created_at,
+        creator:created_by(username, full_name)
+      ''')
+        .eq('group_id', groupId)
+        .order('date', ascending: false)
+        .limit(20);
+
+    final List<Map<String, dynamic>> activities = [];
+    for (final e in expensesRes) {
+      final creator = e['creator'] ?? {};
+      activities.add({
+        'id': e['id'],
+        'desc': e['description'],
+        'amount': e['total_amount'],
+        'when': e['date'] != null
+            ? DateTime.parse(e['date'])
+            : DateTime.parse(e['created_at']),
+        'actor': creator['full_name'] ?? creator['username'] ?? 'Unknown',
+      });
+    }
+
+    // 4. Calculate member balances
+    final Map<String, Map<String, double>> memberBalances = {};
+    final expenseIds = expensesRes.map((e) => e['id'] as int).toList();
+    if (expenseIds.isNotEmpty && userId != null) {
+      final participantsRes = await _supabase
+          .from('expense_participants')
+          .select('expense_id, user_id, share_amount, paid_amount, settled')
+          .inFilter('expense_id', expenseIds);
+
+      final Map<int, List<Map<String, dynamic>>> expenseParticipants = {};
+      for (final p in participantsRes) {
+        final expId = p['expense_id'] as int;
+        expenseParticipants.putIfAbsent(expId, () => []).add(p);
+      }
+
+      for (final m in members) {
+        final memberId = m['user_id'] as String;
+        if (memberId == userId) continue;
+
+        double youOwe = 0.0;
+        double youAreOwed = 0.0;
+
+        for (final exp in expensesRes) {
+          final expId = exp['id'] as int;
+          final parts = expenseParticipants[expId] ?? [];
+          final totalExpAmount = (exp['total_amount'] as num).toDouble();
+          if (totalExpAmount <= 0) continue;
+
+          final myPart = parts.where((p) => p['user_id'] == userId).firstOrNull;
+          final memberPart = parts.where((p) => p['user_id'] == memberId).firstOrNull;
+
+          if (myPart != null && memberPart != null) {
+            final myPaid = (myPart['paid_amount'] as num? ?? 0).toDouble();
+            final memberShare = (memberPart['share_amount'] as num? ?? 0).toDouble();
+            final memberPaid = (memberPart['paid_amount'] as num? ?? 0).toDouble();
+            final myShare = (myPart['share_amount'] as num? ?? 0).toDouble();
+
+            if (myPaid > 0 && memberShare > 0) {
+              final ratio = (myPaid / totalExpAmount).clamp(0.0, 1.0);
+              youAreOwed += memberShare * ratio;
+            }
+            if (memberPaid > 0 && myShare > 0) {
+              final ratio = (memberPaid / totalExpAmount).clamp(0.0, 1.0);
+              youOwe += myShare * ratio;
+            }
+          }
+        }
+
+        final net = youAreOwed - youOwe;
+        memberBalances[memberId] = {
+          'youOwe': net < 0 ? net.abs() : 0.0,
+          'youAreOwed': net > 0 ? net : 0.0,
+        };
+      }
+    }
+
+    return {
+      'groupName': groupName,
+      'inviteCode': inviteCode,
+      'createdById': createdById,
+      'members': members,
+      'activities': activities,
+      'memberBalances': memberBalances,
+    };
+  }
+
+  Future<void> updateGroupName(int groupId, String newName) async {
+    await _supabase.from('groups').update({
+      'name': newName.trim(),
+    }).eq('id', groupId);
+    LoggerService.info('Updated group $groupId name to $newName');
+    await fetchGroups();
+  }
+
+  Future<void> deleteGroup(int groupId) async {
+    await _supabase.from('groups').delete().eq('id', groupId);
+    LoggerService.info('Deleted group $groupId');
+    _groups.removeWhere((g) => g['id'] == groupId);
+    notifyListeners();
+  }
 }

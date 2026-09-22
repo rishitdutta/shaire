@@ -1,4 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../services/logger_service.dart';
 
 class UserSpendingAnalytics {
   final int id;
@@ -68,13 +69,13 @@ class UserSpendingAnalyticsService {
           .maybeSingle();
 
       if (response == null) {
-        print('No analytics found for user: $userId, month: $month, year: $year');
+        LoggerService.warning('No analytics found for user: $userId, month: $month, year: $year');
         return null;
       }
 
       return UserSpendingAnalytics.fromJson(response);
     } catch (error) {
-      print('Error fetching analytics: $error');
+      LoggerService.error('Error fetching analytics: $error');
       return null;
     }
   }
@@ -87,10 +88,10 @@ class UserSpendingAnalyticsService {
           .from('user_spending_analytics')
           .insert(analytics.toJson());
 
-      print('User spending analytics created successfully');
+      LoggerService.info('User spending analytics created successfully');
       return true;
     } catch (error) {
-      print('Error creating user spending analytics: $error');
+      LoggerService.error('Error creating user spending analytics: $error');
       return false;
     }
   }
@@ -104,10 +105,10 @@ class UserSpendingAnalyticsService {
           .update(analytics.toJson())
           .eq('id', analytics.id);
 
-      print('User spending analytics updated successfully');
+      LoggerService.info('User spending analytics updated successfully');
       return true;
     } catch (error) {
-      print('Error updating user spending analytics: $error');
+      LoggerService.error('Error updating user spending analytics: $error');
       return false;
     }
   }
@@ -120,10 +121,10 @@ class UserSpendingAnalyticsService {
           .delete()
           .eq('id', id);
 
-      print('User spending analytics deleted successfully');
+      LoggerService.info('User spending analytics deleted successfully');
       return true;
     } catch (error) {
-      print('Error deleting user spending analytics: $error');
+      LoggerService.error('Error deleting user spending analytics: $error');
       return false;
     }
   }

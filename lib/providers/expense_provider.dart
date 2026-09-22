@@ -9,10 +9,15 @@ class ExpenseProvider with ChangeNotifier {
   List<Expense> _expenses = [];
   bool _isLoading = false;
   int _lastInsertedId = 0; // Changed from final to allow modification
+  double _youGet = 0.0;
+  double _youOwe = 0.0;
 
   List<Expense> get expenses => _expenses;
   bool get isLoading => _isLoading;
   int get lastInsertedId => _lastInsertedId;
+  double get youGet => _youGet;
+  double get youOwe => _youOwe;
+  String? get currentUserId => supabase.auth.currentUser?.id;
 
   /// Fetch all expenses for the current user
   Future<void> fetchExpenses() async {
@@ -171,5 +176,65 @@ class ExpenseProvider with ChangeNotifier {
   void clearExpenses() {
     _expenses = [];
     notifyListeners();
+  }
+
+  /// Fetch total balances (you owe / you are owed) for current user
+  Future<Map<String, double>> fetchUserOverallBalances() async {
+    final user = supabase.auth.currentUser;
+    if (user == null) return {'youGet': 0.0, 'youOwe': 0.0};
+
+    try {
+      final balancesResponse = await supabase
+          .from('balances')
+          .select('*')
+          .or('from_user_id.eq.${user.id},to_user_id.eq.${user.id}');
+
+      double getTotalAmount = 0;
+      double oweTotalAmount = 0;
+
+      if (balancesResponse.isNotEmpty) {
+        for (var balance in balancesResponse) {
+          final double amount = (balance['amount'] as num).toDouble();
+          if (balance['from_user_id'] == user.id) {
+            if (amount > 0) {
+              getTotalAmount += amount;
+            } else {
+              oweTotalAmount += -amount;
+            }
+          } else {
+            if (amount > 0) {
+              oweTotalAmount += amount;
+            } else {
+              getTotalAmount += -amount;
+            }
+          }
+        }
+      } else {
+        // Fallback: Compute totals dynamically from unsettled expense_participants
+        final myParticipants = await supabase
+            .from('expense_participants')
+            .select('share_amount, paid_amount, settled')
+            .eq('user_id', user.id)
+            .eq('settled', false);
+
+        for (var p in myParticipants) {
+          final paid = (p['paid_amount'] as num).toDouble();
+          final share = (p['share_amount'] as num).toDouble();
+          if (paid > share) {
+            getTotalAmount += (paid - share);
+          } else if (share > paid) {
+            oweTotalAmount += (share - paid);
+          }
+        }
+      }
+
+      _youGet = getTotalAmount;
+      _youOwe = oweTotalAmount;
+      notifyListeners();
+      return {'youGet': _youGet, 'youOwe': _youOwe};
+    } catch (e) {
+      LoggerService.error('Error calculating overall balances', e);
+      return {'youGet': _youGet, 'youOwe': _youOwe};
+    }
   }
 }

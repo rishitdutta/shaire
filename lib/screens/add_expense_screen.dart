@@ -13,6 +13,12 @@ import '../database/receipt.dart';
 import '../database/balance.dart';
 import 'package:provider/provider.dart';
 import 'package:image/image.dart' as img;
+import '../providers/friend_provider.dart';
+import '../providers/group_provider.dart';
+import '../widgets/split_options_widget.dart';
+import '../widgets/contact_selector_section.dart';
+import '../widgets/receipt_scanner_section.dart';
+import '../widgets/loading_spinner.dart';
 
 class AddExpenseScreen extends StatefulWidget {
   final int? groupId;
@@ -206,49 +212,77 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
     try {
       setState(() => _isLoading = true);
 
-      final userId = _supabase.auth.currentUser?.id;
-      if (userId == null) return;
+      final friendProvider =
+          Provider.of<FriendProvider>(context, listen: false);
+      final groupProvider =
+          Provider.of<GroupProvider>(context, listen: false);
 
-      // Load friends
-      final friendsData = await _supabase
-          .rpc('get_user_friends', params: {'p_user_id': userId});
+      await Future.wait([
+        friendProvider.fetchFriendsAndRequests(),
+        groupProvider.fetchGroups(),
+      ]);
 
-      // Load groups
-      final groupsData = await _supabase
-          .from('group_members')
-          .select('group_id, groups:group_id(id, name)')
-          .eq('user_id', userId);
+      final Map<String, Map<String, dynamic>> contactMap = {};
 
-      // Format the data
-      List<Map<String, dynamic>> friends = [];
-      for (final f in friendsData) {
-        friends.add({
-          'id': f['user_id'],
-          'name': f['full_name'] ?? f['username'] ?? 'Unknown',
+      // 1. Add all friends (including custom name-only friends) from friendProvider
+      for (final f in friendProvider.friends) {
+        final id = f['id'].toString();
+        final isCustom = f['is_custom'] == true;
+        contactMap[id] = {
+          'id': id,
+          'name': f['full_name'] ?? f['username'] ?? 'Friend',
           'username': f['username'],
           'avatar_url': f['avatar_url'],
+          'is_custom': isCustom,
+          'linked_user_id': f['linked_user_id']?.toString(),
           'isGroup': false,
-        });
+        };
       }
 
-      List<Map<String, dynamic>> groups = [];
-      for (final g in groupsData) {
-        final group = g['groups'] as Map<String, dynamic>;
-        groups.add({
-          'id': group['id'],
-          'name': group['name'],
+      // 2. Also query custom_friends directly as a guaranteed fallback
+      final userId = _supabase.auth.currentUser?.id;
+      if (userId != null) {
+        try {
+          final customRes = await _supabase
+              .from('custom_friends')
+              .select('id, name, linked_user_id')
+              .eq('user_id', userId);
+          for (final c in customRes) {
+            final id = c['id'].toString();
+            contactMap.putIfAbsent(id, () => {
+              'id': id,
+              'name': c['name'] ?? 'Friend',
+              'username': null,
+              'avatar_url': null,
+              'is_custom': true,
+              'linked_user_id': c['linked_user_id']?.toString(),
+              'isGroup': false,
+            });
+          }
+        } catch (err) {
+          LoggerService.warning('Direct custom_friends query fallback: $err');
+        }
+      }
+
+      // 3. Add groups from groupProvider
+      final List<Map<String, dynamic>> groups = groupProvider.groups.map((g) {
+        return {
+          'id': g['id'],
+          'name': g['name'],
           'isGroup': true,
-        });
-      }
+        };
+      }).toList();
 
-      // Combine friends and groups
+      final allFriends = contactMap.values.toList();
+
+      if (!mounted) return;
       setState(() {
-        _availableContacts = [...friends, ...groups];
+        _availableContacts = [...allFriends, ...groups];
         _isLoading = false;
       });
 
       LoggerService.debug(
-          'Loaded ${_availableContacts.length} contacts (${friends.length} friends, ${groups.length} groups)');
+          'Loaded ${_availableContacts.length} contacts (${allFriends.length} friends, ${groups.length} groups)');
     } catch (e) {
       LoggerService.error('Error loading contacts', e);
 
@@ -294,7 +328,10 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
         ],
       ),
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
+          ? const LoadingSpinner(
+              initialMessage: 'Saving expense & updating balances...',
+              wakeUpMessage: 'Please wait as the backend wakes up...',
+            )
           : _buildMainContent(),
       bottomNavigationBar: _buildBottomButton(),
     );
@@ -311,10 +348,42 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildContactsSection(),
+                  ContactSelectorSection(
+                    searchController: _searchController,
+                    searchQuery: _searchQuery,
+                    availableContacts: _availableContacts,
+                    selectedContacts: _selectedContactsData,
+                    onContactSelected: (contact) {
+                      _addSelectedContact(contact);
+                      _searchController.clear();
+                    },
+                    onContactRemoved: _removeSelectedContact,
+                  ),
                   _buildBasicExpenseDetails(),
-                  _buildSplitSection(),
-                  if (_billEntries.isNotEmpty) _buildBillItems(),
+                  SplitOptionsWidget(
+                    tabController: _tabController,
+                    splitType: _splitType,
+                    selectedContacts: _selectedContactsData,
+                    totalAmountController: _totalAmountController,
+                    individualAmountControllers: _individualAmountControllers,
+                    individualPercentControllers: _individualPercentControllers,
+                    onSplitTypeChanged: (type) {
+                      setState(() {
+                        _splitType = type;
+                        _updateSplitAmounts();
+                      });
+                    },
+                    onAmountsChanged: () {
+                      _updateSplitAmounts();
+                    },
+                  ),
+                  ReceiptScannerSection(
+                    billEntries: _billEntries,
+                    onBatchAssign: _billEntries.isNotEmpty
+                        ? _showBatchAssignmentOptions
+                        : null,
+                    onEditItem: _assignItemToContacts,
+                  ),
                   const SizedBox(height: 80), // Space for button
                 ],
               ),
@@ -322,124 +391,6 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
           ),
         ],
       ),
-    );
-  }
-
-  Widget _buildContactsSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Select People or Groups',
-          style: Theme.of(context).textTheme.titleLarge,
-        ),
-        const SizedBox(height: 8),
-
-        // Search bar
-        TextField(
-          controller: _searchController,
-          decoration: InputDecoration(
-            hintText: 'Search friends or groups',
-            prefixIcon: const Icon(Icons.search),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide.none,
-            ),
-            filled: true,
-            fillColor: Theme.of(context).brightness == Brightness.dark
-                ? Theme.of(context).cardColor.withValues(alpha: 0.5)
-                : Colors.grey.shade200,
-          ),
-        ),
-
-        // Search results (only show when searching)
-        if (_searchQuery.isNotEmpty)
-          Container(
-            margin: const EdgeInsets.only(top: 8),
-            constraints: const BoxConstraints(maxHeight: 200),
-            decoration: BoxDecoration(
-              color: Theme.of(context).cardColor,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.grey.shade300),
-            ),
-            child: ListView.builder(
-              shrinkWrap: true,
-              itemCount: _availableContacts
-                  .where((contact) => contact['name']
-                      .toString()
-                      .toLowerCase()
-                      .contains(_searchQuery.toLowerCase()))
-                  .length,
-              itemBuilder: (context, index) {
-                final filteredContacts = _availableContacts
-                    .where((contact) => contact['name']
-                        .toString()
-                        .toLowerCase()
-                        .contains(_searchQuery.toLowerCase()))
-                    .toList();
-
-                if (index >= filteredContacts.length) return const SizedBox();
-
-                final contact = filteredContacts[index];
-                final isSelected = _selectedContactsData.any((c) =>
-                    c['id'] == contact['id'] &&
-                    c['isGroup'] == contact['isGroup']);
-
-                return ListTile(
-                  leading: CircleAvatar(
-                    child: Icon(contact['isGroup'] == true
-                        ? Icons.group
-                        : Icons.person),
-                  ),
-                  title: Text(contact['name']),
-                  subtitle:
-                      Text(contact['isGroup'] == true ? 'Group' : 'Friend'),
-                  trailing: isSelected
-                      ? const Icon(Icons.check_circle, color: Colors.green)
-                      : const Icon(Icons.add_circle_outline),
-                  onTap: () {
-                    if (isSelected) {
-                      _removeSelectedContact(contact);
-                    } else {
-                      _addSelectedContact(contact);
-                      // Clear search after selection
-                      _searchController.clear();
-                    }
-                  },
-                );
-              },
-            ),
-          ),
-
-        // Selected contacts chips
-        if (_selectedContactsData.isNotEmpty) ...[
-          const SizedBox(height: 16),
-          Text(
-            'Selected:',
-            style: Theme.of(context).textTheme.titleSmall,
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: _selectedContactsData.map((contact) {
-              return Chip(
-                avatar: CircleAvatar(
-                  child: Icon(
-                    contact['isGroup'] == true ? Icons.group : Icons.person,
-                    size: 16,
-                  ),
-                ),
-                label: Text(contact['name']),
-                deleteIcon: const Icon(Icons.close, size: 16),
-                onDeleted: () => _removeSelectedContact(contact),
-              );
-            }).toList(),
-          ),
-        ],
-
-        Divider(height: 32, color: Colors.grey.shade300),
-      ],
     );
   }
 
@@ -544,375 +495,6 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
       ],
     );
   }
-
-  Widget _buildSplitSection() {
-    if (_selectedContactsData.isEmpty) {
-      return const Padding(
-        padding: EdgeInsets.all(16.0),
-        child: Center(
-          child: Text('Add friends or groups to split the expense'),
-        ),
-      );
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Split Details',
-          style: Theme.of(context).textTheme.titleLarge,
-        ),
-        const SizedBox(height: 16),
-
-        // Split type tabs
-        TabBar(
-          controller: _tabController,
-          tabs: const [
-            Tab(text: 'Equal'),
-            Tab(text: 'Manual'),
-            Tab(text: 'Percentage'),
-          ],
-          dividerColor: Colors.grey.shade300,
-          onTap: (index) {
-            setState(() {
-              _splitType = SplitType.values[index];
-              _updateSplitAmounts();
-            });
-          },
-        ),
-
-        const SizedBox(height: 16),
-
-        // Tab content
-        SizedBox(
-          height: (_selectedContactsData.length + 1) *
-              60.0, // Height based on number of participants
-          child: TabBarView(
-            controller: _tabController,
-            children: [
-              _buildEqualSplitTab(),
-              _buildManualSplitTab(),
-              _buildPercentageSplitTab(),
-            ],
-          ),
-        ),
-
-        Divider(height: 32, color: Colors.grey.shade300),
-      ],
-    );
-  }
-
-  Widget _buildEqualSplitTab() {
-    final totalAmount = double.tryParse(_totalAmountController.text) ?? 0;
-    final totalParticipants =
-        _selectedContactsData.length + 1; // +1 for current user
-    final perPersonAmount =
-        totalParticipants > 0 ? totalAmount / totalParticipants : 0;
-    final currencyProvider =
-        Provider.of<CurrencyProvider>(context, listen: false);
-
-    return ListView(
-      children: [
-        // Current user (you)
-        ListTile(
-          leading: const CircleAvatar(child: Icon(Icons.person)),
-          title: const Text('You (paid)'),
-          trailing: Text(
-            currencyProvider.format(perPersonAmount.toDouble()),
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
-        ),
-
-        // Selected contacts
-        ..._selectedContactsData.map((contact) => ListTile(
-              leading: CircleAvatar(
-                child: Icon(
-                    contact['isGroup'] == true ? Icons.group : Icons.person),
-              ),
-              title: Text(contact['name']),
-              trailing: Text(
-                currencyProvider.format(perPersonAmount.toDouble()),
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-            )),
-      ],
-    );
-  }
-
-  Widget _buildManualSplitTab() {
-    final currencyProvider =
-        Provider.of<CurrencyProvider>(context, listen: false);
-    final totalAmount = double.tryParse(_totalAmountController.text) ?? 0;
-
-    // Ensure controller for "You" exists
-    _individualAmountControllers['you'] ??=
-        TextEditingController(text: (totalAmount / (_selectedContactsData.length + 1)).toStringAsFixed(2));
-
-    return ListView(
-      children: [
-        // Current user (you)
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8.0),
-          child: Row(
-            children: [
-              const CircleAvatar(child: Icon(Icons.person)),
-              const SizedBox(width: 16),
-              const Expanded(child: Text('You (paid)')),
-              SizedBox(
-                width: 120,
-                child: TextField(
-                  controller: _individualAmountControllers['you'],
-                  decoration: InputDecoration(
-                    border: const OutlineInputBorder(),
-                    prefixText: currencyProvider.currencySymbol,
-                    contentPadding:
-                        const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-                  ),
-                  keyboardType:
-                      const TextInputType.numberWithOptions(decimal: true),
-                  inputFormatters: [
-                    FilteringTextInputFormatter.allow(RegExp(r'^\d+\.?\d{0,2}')),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-
-        // Selected contacts
-        ..._selectedContactsData.map((contact) {
-          final id = contact['id'].toString();
-
-          // Ensure controller exists for each contact
-          _individualAmountControllers[id] ??= TextEditingController(
-              text: (totalAmount / (_selectedContactsData.length + 1)).toStringAsFixed(2));
-
-          return Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8.0),
-            child: Row(
-              children: [
-                CircleAvatar(
-                  child: Icon(
-                      contact['isGroup'] == true ? Icons.group : Icons.person),
-                ),
-                const SizedBox(width: 16),
-                Expanded(child: Text(contact['name'])),
-                SizedBox(
-                  width: 120,
-                  child: TextField(
-                    controller: _individualAmountControllers[id],
-                    decoration: InputDecoration(
-                      border: const OutlineInputBorder(),
-                      prefixText: currencyProvider.currencySymbol,
-                      contentPadding: const EdgeInsets.symmetric(
-                          vertical: 8, horizontal: 12),
-                    ),
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
-                    inputFormatters: [
-                      FilteringTextInputFormatter.allow(
-                          RegExp(r'^\d+\.?\d{0,2}')),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          );
-        }),
-      ],
-    );
-  }
-
-  Widget _buildPercentageSplitTab() {
-    final currencyProvider =
-        Provider.of<CurrencyProvider>(context, listen: false);
-    final totalAmount = double.tryParse(_totalAmountController.text) ?? 0;
-    final defaultPercentage = 100 / (_selectedContactsData.length + 1);
-
-    return ListView(
-      children: [
-        // Current user (you)
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8.0),
-          child: Row(
-            children: [
-              const CircleAvatar(child: Icon(Icons.person)),
-              const SizedBox(width: 16),
-              const Expanded(child: Text('You (paid)')),
-              Row(
-                children: [
-                  SizedBox(
-                    width: 80,
-                    child: TextField(
-                      decoration: const InputDecoration(
-                        border: OutlineInputBorder(),
-                        suffixText: '%',
-                        contentPadding:
-                            EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-                      ),
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
-                      inputFormatters: [
-                        FilteringTextInputFormatter.allow(
-                            RegExp(r'^\d+\.?\d{0,2}')),
-                      ],
-                      controller: TextEditingController(
-                          text: defaultPercentage.toStringAsFixed(0)),
-                      onChanged: (_) => _updateSplitAmounts(),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(currencyProvider
-                      .format((defaultPercentage / 100) * totalAmount)),
-                ],
-              ),
-            ],
-          ),
-        ),
-
-        // Selected contacts
-        ..._selectedContactsData.map((contact) {
-          final id = contact['id'].toString();
-
-          // Create controllers if they don't exist
-          _individualPercentControllers[id] ??=
-              TextEditingController(text: defaultPercentage.toStringAsFixed(0));
-
-          _individualAmountControllers[id] ??= TextEditingController(
-              text:
-                  ((defaultPercentage / 100) * totalAmount).toStringAsFixed(2));
-
-          return Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8.0),
-            child: Row(
-              children: [
-                CircleAvatar(
-                  child: Icon(
-                      contact['isGroup'] == true ? Icons.group : Icons.person),
-                ),
-                const SizedBox(width: 16),
-                Expanded(child: Text(contact['name'])),
-                Row(
-                  children: [
-                    SizedBox(
-                      width: 80,
-                      child: TextField(
-                        controller: _individualPercentControllers[id],
-                        decoration: const InputDecoration(
-                          border: OutlineInputBorder(),
-                          suffixText: '%',
-                          contentPadding:
-                              EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-                        ),
-                        keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true),
-                        inputFormatters: [
-                          FilteringTextInputFormatter.allow(
-                              RegExp(r'^\d+\.?\d{0,2}')),
-                        ],
-                        onChanged: (_) => _updateSplitAmounts(),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(currencyProvider.format(double.parse(
-                        _individualAmountControllers[id]?.text ?? '0'))),
-                  ],
-                ),
-              ],
-            ),
-          );
-        }),
-      ],
-    );
-  }
-
-  Widget _buildBillItems() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(
-              'Receipt Items',
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
-            TextButton.icon(
-              icon: const Icon(Icons.people),
-              label: const Text('Batch Assign'),
-              onPressed:
-                  _billEntries.isNotEmpty ? _showBatchAssignmentOptions : null,
-            ),
-          ],
-        ),
-        const SizedBox(height: 16),
-
-        // Bill items list
-        ListView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          itemCount: _billEntries.length,
-          itemBuilder: (context, index) {
-            final item = _billEntries[index];
-
-            return Card(
-              child: Padding(
-                padding: const EdgeInsets.all(12.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            item.description,
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
-                        ),
-                        Text(
-                          Provider.of<CurrencyProvider>(context)
-                              .format(item.amount),
-                          style: Theme.of(context).textTheme.titleMedium,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        const Text('Assigned to: '),
-                        Expanded(
-                          child: Wrap(
-                            spacing: 4,
-                            children: [
-                              if (item.assignedTo.isEmpty)
-                                const Chip(label: Text('No one')),
-                              ...item.assignedTo.map((name) => Chip(
-                                    label: Text(name),
-                                    visualDensity: VisualDensity.compact,
-                                    materialTapTargetSize:
-                                        MaterialTapTargetSize.shrinkWrap,
-                                  )),
-                            ],
-                          ),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.edit),
-                          onPressed: () => _assignItemToContacts(item, index),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
-        ),
-
-        const Divider(height: 32),
-      ],
-    );
-  }
-
   Widget _buildBottomButton() {
     return SafeArea(
       child: Padding(
@@ -1001,14 +583,13 @@ Future<File> _compressImage(File file) async {
 
       final file = File(pickedFile.path);
       Map<String, dynamic> billResult = {};
-      Receipt? receipt;
 
       try {
         // Upload receipt
         final compressedFile = await _compressImage(file);
 
         // Process image with OCR
-        billResult = await _billService.extractBillInfo(file);
+        billResult = await _billService.extractBillInfo(compressedFile);
         LoggerService.debug('Bill OCR result: $billResult');
 
         setState(() {
@@ -1279,7 +860,7 @@ Future<File> _compressImage(File file) async {
 
     showDialog(
       context: context,
-      builder: (context) => _AssignItemDialog(
+      builder: (context) => AssignItemDialog(
         itemDescription: item.description,
         allNames: allNames,
         initialSelectedNames: List<String>.from(item.assignedTo),
@@ -1318,6 +899,12 @@ Future<File> _compressImage(File file) async {
 
     if (_formKey.currentState!.validate()) {
       try {
+        final currencyProvider =
+            Provider.of<CurrencyProvider>(context, listen: false);
+        final expenseProvider =
+            Provider.of<ExpenseProvider>(context, listen: false);
+        final currencyCode = currencyProvider.currencyCode;
+
         setState(() => _isLoading = true);
 
         // Get the current user ID
@@ -1329,11 +916,6 @@ Future<File> _compressImage(File file) async {
         } catch (e) {
           throw Exception('Profile creation failed: $e');
         }
-
-        final currencyProvider =
-            Provider.of<CurrencyProvider>(context, listen: false);
-        final expenseProvider =
-            Provider.of<ExpenseProvider>(context, listen: false);
 
         // Convert the string category to an integer ID
         int? categoryId = _getCategoryId(_selectedCategory);
@@ -1349,7 +931,6 @@ Future<File> _compressImage(File file) async {
 
         // Create the expense
         final now = DateTime.now();
-        final currencyCode = Provider.of<CurrencyProvider>(context, listen: false).currencyCode;
         final newExpense = Expense(
           id: 0,
           description: _descriptionController.text,
@@ -1600,96 +1181,5 @@ Future<File> _compressImage(File file) async {
     };
 
     return categoryMap[categoryName] ?? 7; // Default to 'Other'
-  }
-}
-
-// Support classes
-enum SplitType { equal, manual, percentage }
-
-class BillEntry {
-  final String description;
-  final double amount;
-  final List<String> assignedTo;
-  final BillEntryType type;
-
-  BillEntry({
-    required this.description,
-    required this.amount,
-    required this.assignedTo,
-    this.type = BillEntryType.item,
-  });
-}
-
-enum BillEntryType { item, tax, discount }
-
-class _AssignItemDialog extends StatefulWidget {
-  final String itemDescription;
-  final List<String> allNames;
-  final List<String> initialSelectedNames;
-  final Function(List<String>) onSave;
-
-  const _AssignItemDialog({
-    required this.itemDescription,
-    required this.allNames,
-    required this.initialSelectedNames,
-    required this.onSave,
-  });
-
-  @override
-  State<_AssignItemDialog> createState() => _AssignItemDialogState();
-}
-
-class _AssignItemDialogState extends State<_AssignItemDialog> {
-  late List<String> selectedNames;
-
-  @override
-  void initState() {
-    super.initState();
-    selectedNames = List<String>.from(widget.initialSelectedNames);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text('Assign "${widget.itemDescription}"'),
-      content: SizedBox(
-        width: double.maxFinite,
-        child: ListView.builder(
-          shrinkWrap: true,
-          itemCount: widget.allNames.length,
-          itemBuilder: (context, i) {
-            final name = widget.allNames[i];
-            return CheckboxListTile(
-              title: Text(name),
-              value: selectedNames.contains(name),
-              onChanged: (bool? value) {
-                setState(() {
-                  if (value == true) {
-                    if (!selectedNames.contains(name)) {
-                      selectedNames.add(name);
-                    }
-                  } else {
-                    selectedNames.remove(name);
-                  }
-                });
-              },
-            );
-          },
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('CANCEL'),
-        ),
-        ElevatedButton(
-          onPressed: () {
-            widget.onSave(selectedNames);
-            Navigator.pop(context);
-          },
-          child: const Text('SAVE'),
-        ),
-      ],
-    );
   }
 }

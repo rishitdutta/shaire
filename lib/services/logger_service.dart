@@ -8,7 +8,7 @@ class LoggerService {
       lineLength: 120,
       colors: true,
       printEmojis: true,
-      printTime: true,
+      dateTimeFormat: DateTimeFormat.onlyTimeAndSinceStart,
     ),
   );
 
@@ -51,9 +51,9 @@ class LoggerService {
   static void verbose(dynamic message,
       [dynamic error, StackTrace? stackTrace]) {
     if (error != null) {
-      _logger.v(message, error: error, stackTrace: stackTrace);
+      _logger.t(message, error: error, stackTrace: stackTrace);
     } else {
-      _logger.v(message);
+      _logger.t(message);
     }
   }
 }

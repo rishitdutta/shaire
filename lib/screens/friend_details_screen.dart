@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../providers/currency_provider.dart';
 import '../providers/expense_provider.dart';
+import '../providers/friend_provider.dart';
 import '../database/balance.dart';
 import '../database/payment.dart';
+import '../widgets/loading_spinner.dart';
 import 'add_expense_screen.dart';
 
 class FriendDetailsScreen extends StatefulWidget {
@@ -18,7 +19,6 @@ class FriendDetailsScreen extends StatefulWidget {
 
 class _FriendDetailsScreenState extends State<FriendDetailsScreen>
     with SingleTickerProviderStateMixin {
-  final _supabase = Supabase.instance.client;
   bool _loading = true, _error = false;
   String? _errorMsg;
 
@@ -37,7 +37,8 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
-    _currentUserId = _supabase.auth.currentUser?.id;
+    final friendProvider = Provider.of<FriendProvider>(context, listen: false);
+    _currentUserId = friendProvider.currentUserId;
     _expenseProvider = Provider.of<ExpenseProvider>(context, listen: false);
     _expenseProvider.addListener(_onExpensesChanged);
     _loadFriendDetails();
@@ -59,103 +60,24 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
   Future<void> _loadFriendDetails() async {
     setState(() => _loading = true);
     try {
-      // 1. Load friend's profile
-      final profileRes = await _supabase
-          .from('profiles')
-          .select('full_name, username, avatar_url')
-          .eq('id', widget.friendId)
-          .maybeSingle();
+      final friendProvider =
+          Provider.of<FriendProvider>(context, listen: false);
+      final data = await friendProvider
+          .fetchFriendDetailsAndSharedData(widget.friendId);
 
-      if (profileRes != null) {
-        _friendProfile = profileRes;
-      } else {
-        try {
-          final customRes = await _supabase
-              .from('custom_friends')
-              .select('name')
-              .eq('id', widget.friendId)
-              .maybeSingle();
-          if (customRes != null) {
-            _friendProfile = {
-              'full_name': customRes['name'],
-              'username': null,
-              'avatar_url': null,
-            };
-          }
-        } catch (_) {}
-      }
-
-      // 2. Load shared expenses
-      final expensesRes = await _supabase.rpc(
-        'get_shared_expenses',
-        params: {
-          'p_current_user_id': _currentUserId,
-          'p_friend_id': widget.friendId,
-        },
-      );
-
-      // 3. Load payments between the two users
-      final paymentsRes = await PaymentService().fetchPaymentsBetweenUsers(
-        _currentUserId!,
-        widget.friendId.toString(),
-      );
-
-      _expenses.clear();
-      double expensesYouOwe = 0;
-      double expensesYouAreOwed = 0;
-
-      for (final e in expensesRes) {
-        final amount = (e['total_amount'] as num).toDouble();
-        final yourShare = (e['your_share'] as num? ?? 0).toDouble();
-        final friendShare = (e['friend_share'] as num?)?.toDouble() ??
-            (amount > yourShare ? amount - yourShare : 0.0);
-        final youPaid = (e['you_paid'] as num? ?? 0).toDouble();
-        final friendPaid = (e['friend_paid'] as num? ?? 0).toDouble();
-
-        // Exact pairwise logic:
-        if (youPaid > 0 && friendShare > 0) {
-          final coverage = amount > 0 ? (youPaid / amount).clamp(0.0, 1.0) : 1.0;
-          expensesYouAreOwed += friendShare * coverage;
-        }
-        if (friendPaid > 0 && yourShare > 0) {
-          final coverage = amount > 0 ? (friendPaid / amount).clamp(0.0, 1.0) : 1.0;
-          expensesYouOwe += yourShare * coverage;
-        }
-
-        _expenses.add({
-          'id': e['id'] as int,
-          'description': e['description'],
-          'amount': amount,
-          'date': DateTime.parse(e['date'] as String),
-          'creator_name': e['creator_name'],
-          'your_share': yourShare,
-          'you_paid': youPaid,
-          'friend_paid': friendPaid,
-        });
-      }
-
-      _payments.clear();
-      double paidToFriend = 0.0;
-      double receivedFromFriend = 0.0;
-      for (final p in paymentsRes) {
-        final pAmt = (p['amount'] as num).toDouble();
-        if (p['from_user_id'] == _currentUserId) {
-          paidToFriend += pAmt;
-        } else {
-          receivedFromFriend += pAmt;
-        }
-        _payments.add(Map<String, dynamic>.from(p));
-      }
-
-      final net = (expensesYouAreOwed - expensesYouOwe) + (paidToFriend - receivedFromFriend);
-      _netBalance = net;
-      if (net > 0) {
-        _youAreOwed = net;
-        _youOwe = 0.0;
-      } else {
-        _youOwe = net.abs();
-        _youAreOwed = 0.0;
-      }
+      if (!mounted) return;
+      setState(() {
+        _friendProfile = data['profile'];
+        _expenses.clear();
+        _expenses.addAll(data['expenses']);
+        _payments.clear();
+        _payments.addAll(data['payments']);
+        _netBalance = data['netBalance'] ?? 0.0;
+        _youAreOwed = data['youAreOwed'] ?? 0.0;
+        _youOwe = data['youOwe'] ?? 0.0;
+        _error = false;
+        _errorMsg = null;
+      });
     } catch (e) {
       _error = true;
       _errorMsg = e.toString();
@@ -248,7 +170,10 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
 
     if (_loading && _friendProfile == null) {
       return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
+        body: LoadingSpinner(
+          initialMessage: 'Loading friend details...',
+          wakeUpMessage: 'Please wait as the backend wakes up...',
+        ),
       );
     }
 

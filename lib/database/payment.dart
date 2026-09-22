@@ -1,4 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../services/logger_service.dart';
 
 class Payment {
   final int id;
@@ -73,13 +74,13 @@ class PaymentService {
           .maybeSingle();
 
       if (response == null) {
-        print('Payment not found');
+        LoggerService.warning('Payment not found');
         return null;
       }
 
       return Payment.fromJson(response);
     } catch (error) {
-      print('Error fetching payment: $error');
+      LoggerService.error('Error fetching payment: $error');
       return null;
     }
   }
@@ -88,10 +89,10 @@ class PaymentService {
   Future<bool> createPayment(Payment payment) async {
     try {
       await supabase.from('payments').insert(payment.toJson());
-      print('Payment created successfully');
+      LoggerService.info('Payment created successfully');
       return true;
     } catch (error) {
-      print('Error creating payment: $error');
+      LoggerService.error('Error creating payment: $error');
       return false;
     }
   }
@@ -104,10 +105,10 @@ class PaymentService {
           .update(payment.toJson())
           .eq('id', payment.id);
 
-      print('Payment updated successfully');
+      LoggerService.info('Payment updated successfully');
       return true;
     } catch (error) {
-      print('Error updating payment: $error');
+      LoggerService.error('Error updating payment: $error');
       return false;
     }
   }
@@ -123,7 +124,7 @@ class PaymentService {
           .order('payment_date', ascending: false);
       return List<Map<String, dynamic>>.from(res);
     } catch (error) {
-      print('Error fetching payments between users: $error');
+      LoggerService.error('Error fetching payments between users: $error');
       return [];
     }
   }
@@ -150,7 +151,7 @@ class PaymentService {
       });
       return true;
     } catch (error) {
-      print('Error creating payment: $error');
+      LoggerService.error('Error creating payment: $error');
       return false;
     }
   }
@@ -159,10 +160,10 @@ class PaymentService {
   Future<bool> deletePayment(int id) async {
     try {
       await supabase.from('payments').delete().eq('id', id);
-      print('Payment deleted successfully');
+      LoggerService.info('Payment deleted successfully');
       return true;
     } catch (error) {
-      print('Error deleting payment: $error');
+      LoggerService.error('Error deleting payment: $error');
       return false;
     }
   }

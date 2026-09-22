@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../providers/currency_provider.dart';
+import '../providers/group_provider.dart';
+import '../widgets/loading_spinner.dart';
 import 'add_expense_screen.dart';
 
 class GroupDetailsScreen extends StatefulWidget {
@@ -16,7 +17,6 @@ class GroupDetailsScreen extends StatefulWidget {
 
 class _GroupDetailsScreenState extends State<GroupDetailsScreen>
     with SingleTickerProviderStateMixin {
-  final _supabase = Supabase.instance.client;
   bool _loading = true, _error = false;
   String? _errorMsg;
   String? _groupName, _inviteCode;
@@ -32,7 +32,8 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen>
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
-    _currentUserId = _supabase.auth.currentUser?.id;
+    final groupProvider = Provider.of<GroupProvider>(context, listen: false);
+    _currentUserId = groupProvider.currentUserId;
     _loadAll();
 
     // Listen for tab changes to update FAB
@@ -63,117 +64,26 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen>
   Future<void> _loadAll() async {
     setState(() => _loading = true);
     try {
-      // 1. Fetch group info
-      final groupRes = await _supabase
-          .from('groups')
-          .select('name, invite_code, created_by')
-          .eq('id', widget.groupId)
-          .single();
+      final groupProvider =
+          Provider.of<GroupProvider>(context, listen: false);
+      final details = await groupProvider.fetchGroupDetails(widget.groupId);
 
-      _groupName = groupRes['name'] as String?;
-      _inviteCode = groupRes['invite_code'] as String?;
-      _createdById = groupRes['created_by'] as String?;
-
-      // 2. Fetch members with their profiles
-      final membersRes = await _supabase
-          .from('group_members')
-          .select(
-              'user_id, role, joined_at, profiles:user_id(username, full_name, avatar_url)')
-          .eq('group_id', widget.groupId);
-
-      _members.clear();
-      for (final m in membersRes) {
-        final profile = m['profiles'] ?? {};
-        _members.add({
-          'user_id': m['user_id'],
-          'role': m['role'],
-          'joined_at': m['joined_at'],
-          'username': profile['username'],
-          'full_name': profile['full_name'],
-          'avatar_url': profile['avatar_url'],
-        });
-      }
-
-      // 3. Fetch expenses for this group
-      final expensesRes = await _supabase
-          .from('expenses')
-          .select('''
-          id, description, total_amount, date, created_at,
-          creator:created_by(username, full_name)
-        ''')
-          .eq('group_id', widget.groupId)
-          .order('date', ascending: false)
-          .limit(20);
-
-      _activities.clear();
-      for (final e in expensesRes) {
-        final creator = e['creator'] ?? {};
-        _activities.add({
-          'id': e['id'],
-          'desc': e['description'],
-          'amount': e['total_amount'],
-          'when': e['date'] != null
-              ? DateTime.parse(e['date'])
-              : DateTime.parse(e['created_at']),
-          'actor': creator['full_name'] ?? creator['username'] ?? 'Unknown',
-        });
-      }
-
-      // 4. Calculate real member balances from expense participants
-      final expenseIds = expensesRes.map((e) => e['id'] as int).toList();
-      _memberBalances.clear();
-      if (expenseIds.isNotEmpty && _currentUserId != null) {
-        final participantsRes = await _supabase
-            .from('expense_participants')
-            .select('expense_id, user_id, share_amount, paid_amount, settled')
-            .inFilter('expense_id', expenseIds);
-
-        final Map<int, List<Map<String, dynamic>>> expenseParticipants = {};
-        for (final p in participantsRes) {
-          final expId = p['expense_id'] as int;
-          expenseParticipants.putIfAbsent(expId, () => []).add(p);
-        }
-
-        for (final m in _members) {
-          final memberId = m['user_id'] as String;
-          if (memberId == _currentUserId) continue;
-
-          double youOwe = 0.0;
-          double youAreOwed = 0.0;
-
-          for (final exp in expensesRes) {
-            final expId = exp['id'] as int;
-            final parts = expenseParticipants[expId] ?? [];
-            final totalExpAmount = (exp['total_amount'] as num).toDouble();
-            if (totalExpAmount <= 0) continue;
-
-            final myPart = parts.where((p) => p['user_id'] == _currentUserId).firstOrNull;
-            final memberPart = parts.where((p) => p['user_id'] == memberId).firstOrNull;
-
-            if (myPart != null && memberPart != null) {
-              final myPaid = (myPart['paid_amount'] as num? ?? 0).toDouble();
-              final memberShare = (memberPart['share_amount'] as num? ?? 0).toDouble();
-              final memberPaid = (memberPart['paid_amount'] as num? ?? 0).toDouble();
-              final myShare = (myPart['share_amount'] as num? ?? 0).toDouble();
-
-              if (myPaid > 0 && memberShare > 0) {
-                final ratio = (myPaid / totalExpAmount).clamp(0.0, 1.0);
-                youAreOwed += memberShare * ratio;
-              }
-              if (memberPaid > 0 && myShare > 0) {
-                final ratio = (memberPaid / totalExpAmount).clamp(0.0, 1.0);
-                youOwe += myShare * ratio;
-              }
-            }
-          }
-
-          final net = youAreOwed - youOwe;
-          _memberBalances[memberId] = {
-            'youOwe': net < 0 ? net.abs() : 0.0,
-            'youAreOwed': net > 0 ? net : 0.0,
-          };
-        }
-      }
+      if (!mounted) return;
+      setState(() {
+        _groupName = details['groupName'];
+        _inviteCode = details['inviteCode'];
+        _createdById = details['createdById'];
+        _members.clear();
+        _members.addAll(List<Map<String, dynamic>>.from(details['members']));
+        _activities.clear();
+        _activities.addAll(
+            List<Map<String, dynamic>>.from(details['activities']));
+        _memberBalances.clear();
+        _memberBalances.addAll(
+            Map<String, Map<String, double>>.from(details['memberBalances']));
+        _error = false;
+        _errorMsg = null;
+      });
     } catch (e) {
       _error = true;
       _errorMsg = e.toString();
@@ -233,16 +143,19 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen>
       ),
     );
 
+    if (!mounted) return;
+
     if (result == true) {
       final newName = nameController.text.trim();
 
       if (newName.isNotEmpty) {
         setState(() => _loading = true);
         try {
-          await _supabase.from('groups').update({
-            'name': newName,
-          }).eq('id', widget.groupId);
+          final groupProvider =
+              Provider.of<GroupProvider>(context, listen: false);
+          await groupProvider.updateGroupName(widget.groupId, newName);
 
+          if (!mounted) return;
           setState(() {
             _groupName = newName;
           });
@@ -251,11 +164,12 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen>
             const SnackBar(content: Text('Group name updated successfully')),
           );
         } catch (e) {
+          if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('Error updating group: $e')),
           );
         } finally {
-          setState(() => _loading = false);
+          if (mounted) setState(() => _loading = false);
         }
       }
     }
@@ -289,17 +203,23 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen>
       ),
     );
 
+    if (!mounted) return;
+
     if (result == true) {
       setState(() => _loading = true);
       try {
-        await _supabase.from('groups').delete().eq('id', widget.groupId);
+        final groupProvider =
+            Provider.of<GroupProvider>(context, listen: false);
+        await groupProvider.deleteGroup(widget.groupId);
 
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Group deleted')),
         );
 
         Navigator.pop(context); // Return to groups list
       } catch (e) {
+        if (!mounted) return;
         setState(() => _loading = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error deleting group: $e')),
@@ -317,9 +237,12 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen>
     final onPrimaryColor = colorScheme.onPrimary;
     final textColor = theme.textTheme.bodyLarge?.color ?? Colors.black87;
 
-    if (_loading) {
+    if (_loading && _groupName == null) {
       return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
+        body: LoadingSpinner(
+          initialMessage: 'Loading group details...',
+          wakeUpMessage: 'Please wait as the backend wakes up...',
+        ),
       );
     }
     if (_error) {
@@ -477,7 +400,6 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen>
                         itemBuilder: (context, i) {
                           final m = _members[i];
                           final isCurrentUser = m['user_id'] == _currentUserId;
-                          final isCreator = m['user_id'] == _createdById;
                           final isAdmin = m['role'] == 'admin';
 
                           final memberId = m['user_id'] as String;

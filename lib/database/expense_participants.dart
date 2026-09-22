@@ -1,4 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../services/logger_service.dart';
 
 class ExpenseParticipant {
   final int id;
@@ -54,13 +55,13 @@ class ExpenseParticipantService {
           .maybeSingle();
 
       if (response == null) {
-        print('Expense participant not found');
+        LoggerService.warning('Expense participant not found');
         return null;
       }
 
       return ExpenseParticipant.fromJson(response);
     } catch (error) {
-      print('Error fetching expense participant: $error');
+      LoggerService.error('Error fetching expense participant: $error');
       return null;
     }
   }
@@ -69,10 +70,10 @@ class ExpenseParticipantService {
   Future<bool> addExpenseParticipant(ExpenseParticipant participant) async {
     try {
       await supabase.from('expense_participants').insert(participant.toJson());
-      print('Expense participant added successfully');
+      LoggerService.info('Expense participant added successfully');
       return true;
     } catch (error) {
-      print('Error adding expense participant: $error');
+      LoggerService.error('Error adding expense participant: $error');
       return false;
     }
   }
@@ -85,10 +86,10 @@ class ExpenseParticipantService {
           .update(participant.toJson())
           .eq('id', participant.id);
 
-      print('Expense participant updated successfully');
+      LoggerService.info('Expense participant updated successfully');
       return true;
     } catch (error) {
-      print('Error updating expense participant: $error');
+      LoggerService.error('Error updating expense participant: $error');
       return false;
     }
   }
@@ -97,10 +98,10 @@ class ExpenseParticipantService {
   Future<bool> removeExpenseParticipant(int id) async {
     try {
       await supabase.from('expense_participants').delete().eq('id', id);
-      print('Expense participant removed successfully');
+      LoggerService.info('Expense participant removed successfully');
       return true;
     } catch (error) {
-      print('Error removing expense participant: $error');
+      LoggerService.error('Error removing expense participant: $error');
       return false;
     }
   }

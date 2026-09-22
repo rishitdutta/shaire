@@ -18,6 +18,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'screens/auth_screen.dart';
 import 'screens/complete_profile_screen.dart';
 import 'providers/friend_provider.dart';
+import 'services/logger_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -145,7 +146,7 @@ class _SplashScreenState extends State<SplashScreen> {
         }
       } catch (e) {
         // Handle error fetching profile (e.g., show error message or go to login)
-        print("Error fetching profile in SplashScreen: $e");
+        LoggerService.error("Error fetching profile in SplashScreen: $e");
         if (mounted) {
           // Option: Go to login on error
           Navigator.of(context).pushNamedAndRemoveUntil(
@@ -242,7 +243,7 @@ class _MainScreenState extends State<MainScreen> {
               MaterialPageRoute(builder: (context) => const AddExpenseScreen()))
           .then((_) {
         // Refresh expenses data when returning from the add expense screen
-        if (_selectedIndex == 3) {
+        if (mounted && _selectedIndex == 3) {
           // Expenses tab
           Provider.of<ExpenseProvider>(context, listen: false).fetchExpenses();
         }

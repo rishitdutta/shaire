@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../database/user_spending_analytics.dart';  // Import the model
+import '../services/logger_service.dart';
 
 class AnalyticsProvider with ChangeNotifier {
   final SupabaseClient supabase = Supabase.instance.client;
@@ -30,7 +31,7 @@ class AnalyticsProvider with ChangeNotifier {
               (json) => UserSpendingAnalytics.fromJson(json))
           .toList();
     } catch (error) {
-      print('Error fetching analytics: $error');
+      LoggerService.error('Error fetching analytics: $error');
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -47,13 +48,13 @@ class AnalyticsProvider with ChangeNotifier {
           .maybeSingle();
 
       if (response == null) {
-        print('Analytics record not found for ID: $id');
+        LoggerService.warning('Analytics record not found for ID: $id');
         return null;
       }
 
       return UserSpendingAnalytics.fromJson(response);
     } catch (error) {
-      print('Error fetching analytics by ID: $error');
+      LoggerService.error('Error fetching analytics by ID: $error');
       return null;
     }
   }
@@ -71,7 +72,7 @@ class AnalyticsProvider with ChangeNotifier {
         analytics.year,
       );  // Refresh the list after creation
     } catch (error) {
-      print('Error creating analytics: $error');
+      LoggerService.error('Error creating analytics: $error');
     }
   }
 
@@ -89,7 +90,7 @@ class AnalyticsProvider with ChangeNotifier {
         analytics.year,
       );  // Refresh the list after update
     } catch (error) {
-      print('Error updating analytics: $error');
+      LoggerService.error('Error updating analytics: $error');
     }
   }
 
@@ -104,7 +105,7 @@ class AnalyticsProvider with ChangeNotifier {
       _analytics.removeWhere((analytics) => analytics.id == id);
       notifyListeners();
     } catch (error) {
-      print('Error deleting analytics: $error');
+      LoggerService.error('Error deleting analytics: $error');
     }
   }
 

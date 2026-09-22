@@ -1,5 +1,6 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import '../services/logger_service.dart';
 
 class Expense {
   final int id;
@@ -108,12 +109,12 @@ class ExpenseService {
           .maybeSingle(); // Fetch single or return null
 
       if (response == null) {
-        print('Expense not found');
+        LoggerService.warning('Expense not found');
         return null;
       }
       return Expense.fromJson(response);
     } catch (error) {
-      print('Error fetching expense: $error');
+      LoggerService.error('Error fetching expense: $error');
       return null;
     }
   }
@@ -122,10 +123,10 @@ class ExpenseService {
   Future<bool> createExpense(Expense expense) async {
     try {
       await supabase.from('expenses').insert(expense.toJson());
-      print('Expense created successfully');
+      LoggerService.info('Expense created successfully');
       return true;
     } catch (error) {
-      print('Error creating expense: $error');
+      LoggerService.error('Error creating expense: $error');
       return false;
     }
   }
@@ -138,10 +139,10 @@ class ExpenseService {
           .update(expense.toJson())
           .eq('id', expense.id);
 
-      print('Expense updated successfully');
+      LoggerService.info('Expense updated successfully');
       return true;
     } catch (error) {
-      print('Error updating expense: $error');
+      LoggerService.error('Error updating expense: $error');
       return false;
     }
   }
@@ -150,10 +151,10 @@ class ExpenseService {
   Future<bool> deleteExpense(int id) async {
     try {
       await supabase.from('expenses').delete().eq('id', id);
-      print('Expense deleted successfully');
+      LoggerService.info('Expense deleted successfully');
       return true;
     } catch (error) {
-      print('Error deleting expense: $error');
+      LoggerService.error('Error deleting expense: $error');
       return false;
     }
   }

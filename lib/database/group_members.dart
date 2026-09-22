@@ -1,4 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../services/logger_service.dart';
 
 class GroupMember {
   final int id;
@@ -50,12 +51,12 @@ class GroupMemberService {
           .maybeSingle();  // Fetch a single row or return null if no match
 
       if (response == null) {
-        print('Group member not found');
+        LoggerService.warning('Group member not found');
         return null;
       }
       return GroupMember.fromJson(response);
     } catch (error) {
-      print('Error fetching group member: $error');
+      LoggerService.error('Error fetching group member: $error');
       return null;
     }
   }
@@ -64,10 +65,10 @@ class GroupMemberService {
   Future<bool> addGroupMember(GroupMember member) async {
     try {
       await supabase.from('group_members').insert(member.toJson());
-      print('Group member added successfully');
+      LoggerService.info('Group member added successfully');
       return true;
     } catch (error) {
-      print('Error adding group member: $error');
+      LoggerService.error('Error adding group member: $error');
       return false;
     }
   }
@@ -80,10 +81,10 @@ class GroupMemberService {
           .update(member.toJson())
           .eq('id', member.id);
 
-      print('Group member updated successfully');
+      LoggerService.info('Group member updated successfully');
       return true;
     } catch (error) {
-      print('Error updating group member: $error');
+      LoggerService.error('Error updating group member: $error');
       return false;
     }
   }
@@ -92,10 +93,10 @@ class GroupMemberService {
   Future<bool> removeGroupMember(int id) async {
     try {
       await supabase.from('group_members').delete().eq('id', id);
-      print('Group member removed successfully');
+      LoggerService.info('Group member removed successfully');
       return true;
     } catch (error) {
-      print('Error removing group member: $error');
+      LoggerService.error('Error removing group member: $error');
       return false;
     }
   }

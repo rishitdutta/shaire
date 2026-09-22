@@ -49,7 +49,7 @@ class _AuthScreenState extends State<AuthScreen> {
         data: {'username': _usernameController.text},
       );
 
-      if (response.user != null && context.mounted) {
+      if (response.user != null && mounted) {
         Navigator.of(context).push(
           MaterialPageRoute(
             builder: (context) => VerificationScreen(
@@ -59,13 +59,13 @@ class _AuthScreenState extends State<AuthScreen> {
         );
       }
     } catch (e) {
-      if (context.mounted) {
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error: $e')),
         );
       }
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -76,17 +76,17 @@ class _AuthScreenState extends State<AuthScreen> {
         email: _emailController.text,
         password: _passwordController.text,
       );
-      if (response.session != null && context.mounted) {
+      if (response.session != null && mounted) {
         Navigator.pushReplacementNamed(context, '/home');
       }
     } catch (e) {
-      if (context.mounted) {
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error: $e')),
         );
       }
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -243,8 +243,6 @@ class VerificationScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final primaryColor = Theme.of(context).colorScheme.primary;
-
     return Scaffold(
       // Remove back button
       appBar: AppBar(

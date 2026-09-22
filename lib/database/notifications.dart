@@ -1,4 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../services/logger_service.dart';
 
 class Notification {
   final int id;
@@ -63,13 +64,13 @@ class NotificationService {
           .maybeSingle();
 
       if (response == null) {
-        print('No notification found for ID: $id');
+        LoggerService.warning('No notification found for ID: $id');
         return null;
       }
 
       return Notification.fromJson(response);
     } catch (error) {
-      print('Error fetching notification: $error');
+      LoggerService.error('Error fetching notification: $error');
       return null;
     }
   }
@@ -78,10 +79,10 @@ class NotificationService {
   Future<bool> createNotification(Notification notification) async {
     try {
       await supabase.from('notifications').insert(notification.toJson());
-      print('Notification created successfully');
+      LoggerService.info('Notification created successfully');
       return true;
     } catch (error) {
-      print('Error creating notification: $error');
+      LoggerService.error('Error creating notification: $error');
       return false;
     }
   }
@@ -94,10 +95,10 @@ class NotificationService {
           .update(notification.toJson())
           .eq('id', notification.id);
 
-      print('Notification updated successfully');
+      LoggerService.info('Notification updated successfully');
       return true;
     } catch (error) {
-      print('Error updating notification: $error');
+      LoggerService.error('Error updating notification: $error');
       return false;
     }
   }
@@ -106,10 +107,10 @@ class NotificationService {
   Future<bool> deleteNotification(int id) async {
     try {
       await supabase.from('notifications').delete().eq('id', id);
-      print('Notification deleted successfully');
+      LoggerService.info('Notification deleted successfully');
       return true;
     } catch (error) {
-      print('Error deleting notification: $error');
+      LoggerService.error('Error deleting notification: $error');
       return false;
     }
   }
