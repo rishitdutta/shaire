@@ -126,7 +126,7 @@ class _CompleteProfileScreenState extends State<CompleteProfileScreen> {
                 ),
                 const SizedBox(height: 16),
                 DropdownButtonFormField<String>(
-                  value: _selectedCurrencyCode,
+                  initialValue: _selectedCurrencyCode,
                   decoration:
                       const InputDecoration(labelText: 'Default Currency'),
                   items: CurrencyProvider.availableCurrencies.entries

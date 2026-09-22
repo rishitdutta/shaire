@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
+import '../providers/currency_provider.dart';
 import 'add_expense_screen.dart';
 
 class GroupDetailsScreen extends StatefulWidget {
@@ -20,6 +22,7 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen>
   String? _groupName, _inviteCode;
   final List<Map<String, dynamic>> _members = [];
   final List<Map<String, dynamic>> _activities = [];
+  final Map<String, Map<String, double>> _memberBalances = {};
   late TabController _tabController;
   String? _currentUserId;
   String? _createdById; // Track the creator ID to check admin permissions
@@ -114,6 +117,62 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen>
               : DateTime.parse(e['created_at']),
           'actor': creator['full_name'] ?? creator['username'] ?? 'Unknown',
         });
+      }
+
+      // 4. Calculate real member balances from expense participants
+      final expenseIds = expensesRes.map((e) => e['id'] as int).toList();
+      _memberBalances.clear();
+      if (expenseIds.isNotEmpty && _currentUserId != null) {
+        final participantsRes = await _supabase
+            .from('expense_participants')
+            .select('expense_id, user_id, share_amount, paid_amount, settled')
+            .inFilter('expense_id', expenseIds);
+
+        final Map<int, List<Map<String, dynamic>>> expenseParticipants = {};
+        for (final p in participantsRes) {
+          final expId = p['expense_id'] as int;
+          expenseParticipants.putIfAbsent(expId, () => []).add(p);
+        }
+
+        for (final m in _members) {
+          final memberId = m['user_id'] as String;
+          if (memberId == _currentUserId) continue;
+
+          double youOwe = 0.0;
+          double youAreOwed = 0.0;
+
+          for (final exp in expensesRes) {
+            final expId = exp['id'] as int;
+            final parts = expenseParticipants[expId] ?? [];
+            final totalExpAmount = (exp['total_amount'] as num).toDouble();
+            if (totalExpAmount <= 0) continue;
+
+            final myPart = parts.where((p) => p['user_id'] == _currentUserId).firstOrNull;
+            final memberPart = parts.where((p) => p['user_id'] == memberId).firstOrNull;
+
+            if (myPart != null && memberPart != null) {
+              final myPaid = (myPart['paid_amount'] as num? ?? 0).toDouble();
+              final memberShare = (memberPart['share_amount'] as num? ?? 0).toDouble();
+              final memberPaid = (memberPart['paid_amount'] as num? ?? 0).toDouble();
+              final myShare = (myPart['share_amount'] as num? ?? 0).toDouble();
+
+              if (myPaid > 0 && memberShare > 0) {
+                final ratio = (myPaid / totalExpAmount).clamp(0.0, 1.0);
+                youAreOwed += memberShare * ratio;
+              }
+              if (memberPaid > 0 && myShare > 0) {
+                final ratio = (memberPaid / totalExpAmount).clamp(0.0, 1.0);
+                youOwe += myShare * ratio;
+              }
+            }
+          }
+
+          final net = youAreOwed - youOwe;
+          _memberBalances[memberId] = {
+            'youOwe': net < 0 ? net.abs() : 0.0,
+            'youAreOwed': net > 0 ? net : 0.0,
+          };
+        }
       }
     } catch (e) {
       _error = true;
@@ -421,12 +480,11 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen>
                           final isCreator = m['user_id'] == _createdById;
                           final isAdmin = m['role'] == 'admin';
 
-                          // Calculate balances (this would come from your actual data)
-                          // This is placeholder logic - replace with real balance calculation
-                          final double youOwe =
-                              isCurrentUser ? 0 : (i % 3 == 0 ? 12.50 : 0);
-                          final double youAreOwed =
-                              isCurrentUser ? 0 : (i % 2 == 0 ? 23.75 : 0);
+                          final memberId = m['user_id'] as String;
+                          final balances = _memberBalances[memberId] ?? {'youOwe': 0.0, 'youAreOwed': 0.0};
+                          final double youOwe = isCurrentUser ? 0.0 : (balances['youOwe'] ?? 0.0);
+                          final double youAreOwed = isCurrentUser ? 0.0 : (balances['youAreOwed'] ?? 0.0);
+                          final currencyProvider = Provider.of<CurrencyProvider>(context, listen: false);
 
                           return Card(
                             margin: const EdgeInsets.symmetric(
@@ -441,7 +499,7 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen>
                                       ? NetworkImage(m['avatar_url'])
                                       : null,
                                   backgroundColor:
-                                      colorScheme.primary.withOpacity(.2),
+                                      colorScheme.primary.withValues(alpha: .2),
                                   child: m['avatar_url'] == null
                                       ? const Icon(Icons.person)
                                       : null,
@@ -519,7 +577,7 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen>
                                               backgroundColor:
                                                   Colors.red.shade50,
                                               label: Text(
-                                                'You owe: ${_currencyFormatter.format(youOwe)}',
+                                                'You owe: ${currencyProvider.format(youOwe)}',
                                                 style: const TextStyle(
                                                   color: Colors.red,
                                                   fontWeight: FontWeight.w500,
@@ -527,7 +585,8 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen>
                                                 ),
                                               ),
                                             ),
-                                          const SizedBox(width: 8),
+                                          if (youOwe > 0 && youAreOwed > 0)
+                                            const SizedBox(width: 8),
                                           if (youAreOwed > 0)
                                             Chip(
                                               materialTapTargetSize:
@@ -538,9 +597,27 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen>
                                               backgroundColor:
                                                   Colors.green.shade50,
                                               label: Text(
-                                                'Owes you: ${_currencyFormatter.format(youAreOwed)}',
+                                                'Owes you: ${currencyProvider.format(youAreOwed)}',
                                                 style: const TextStyle(
                                                   color: Colors.green,
+                                                  fontWeight: FontWeight.w500,
+                                                  fontSize: 12,
+                                                ),
+                                              ),
+                                            ),
+                                          if (youOwe == 0 && youAreOwed == 0)
+                                            Chip(
+                                              materialTapTargetSize:
+                                                  MaterialTapTargetSize
+                                                      .shrinkWrap,
+                                              visualDensity:
+                                                  VisualDensity.compact,
+                                              backgroundColor:
+                                                  Colors.grey.shade100,
+                                              label: const Text(
+                                                'Settled up',
+                                                style: TextStyle(
+                                                  color: Colors.grey,
                                                   fontWeight: FontWeight.w500,
                                                   fontSize: 12,
                                                 ),

@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import '../providers/currency_provider.dart';
 import '../providers/expense_provider.dart';
+import '../database/balance.dart';
 import 'add_expense_screen.dart';
 
 class FriendDetailsScreen extends StatefulWidget {
@@ -21,12 +23,12 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
 
   Map<String, dynamic>? _friendProfile;
   final List<Map<String, dynamic>> _expenses = [];
+  final List<Map<String, dynamic>> _payments = [];
   double _youOwe = 0.0;
   double _youAreOwed = 0.0;
   double _netBalance = 0.0;
 
   late TabController _tabController;
-  final _currencyFormatter = NumberFormat.currency(symbol: '₹');
   String? _currentUserId;
   late ExpenseProvider _expenseProvider;
 
@@ -54,72 +56,98 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
   }
 
   Future<void> _loadFriendDetails() async {
-  setState(() => _loading = true);
-  try {
-    // 1. Load friend's profile (unchanged)
-    final profileRes = await _supabase
-        .from('profiles')
-        .select('full_name, username, avatar_url')
-        .eq('id', widget.friendId)
-        .single();
+    setState(() => _loading = true);
+    try {
+      // 1. Load friend's profile
+      final profileRes = await _supabase
+          .from('profiles')
+          .select('full_name, username, avatar_url')
+          .eq('id', widget.friendId)
+          .single();
 
-    _friendProfile = profileRes;
+      _friendProfile = profileRes;
 
-    // 2. Load expenses with fixed RPC function
-    final expensesRes = await _supabase.rpc(
-      'get_shared_expenses',
-      params: {
-        'p_current_user_id': _currentUserId,
-        'p_friend_id': widget.friendId,
-      },
-    );
+      // 2. Load shared expenses
+      final expensesRes = await _supabase.rpc(
+        'get_shared_expenses',
+        params: {
+          'p_current_user_id': _currentUserId,
+          'p_friend_id': widget.friendId,
+        },
+      );
 
-    _expenses.clear();
-    _youOwe = 0;
-    _youAreOwed = 0;
+      // 3. Load payments between the two users
+      final paymentsRes = await _supabase
+          .from('payments')
+          .select('*')
+          .or('and(from_user_id.eq.$_currentUserId,to_user_id.eq.${widget.friendId}),and(from_user_id.eq.${widget.friendId},to_user_id.eq.$_currentUserId)')
+          .order('payment_date', ascending: false);
 
-    for (final e in expensesRes) {
-      final amount = e['total_amount'] as num;
-      final yourShare = e['your_share'] as num? ?? 0;
-      final friendShare = amount - yourShare; // Calculate friend's share
-      final youPaid = e['you_paid'] as num? ?? 0;
-      final friendPaid = e['friend_paid'] as num? ?? 0;
+      _expenses.clear();
+      double expensesYouOwe = 0;
+      double expensesYouAreOwed = 0;
 
-      // Fix balance calculation for each expense
-      if (youPaid > yourShare) {
-        // You paid more than your share, friend owes you
-        _youAreOwed += (youPaid - yourShare);
+      for (final e in expensesRes) {
+        final amount = (e['total_amount'] as num).toDouble();
+        final yourShare = (e['your_share'] as num? ?? 0).toDouble();
+        final friendShare = (e['friend_share'] as num?)?.toDouble() ??
+            (amount > yourShare ? amount - yourShare : 0.0);
+        final youPaid = (e['you_paid'] as num? ?? 0).toDouble();
+        final friendPaid = (e['friend_paid'] as num? ?? 0).toDouble();
+
+        // Exact pairwise logic:
+        if (youPaid > 0 && friendShare > 0) {
+          final coverage = amount > 0 ? (youPaid / amount).clamp(0.0, 1.0) : 1.0;
+          expensesYouAreOwed += friendShare * coverage;
+        }
+        if (friendPaid > 0 && yourShare > 0) {
+          final coverage = amount > 0 ? (friendPaid / amount).clamp(0.0, 1.0) : 1.0;
+          expensesYouOwe += yourShare * coverage;
+        }
+
+        _expenses.add({
+          'id': e['id'] as int,
+          'description': e['description'],
+          'amount': amount,
+          'date': DateTime.parse(e['date'] as String),
+          'creator_name': e['creator_name'],
+          'your_share': yourShare,
+          'you_paid': youPaid,
+          'friend_paid': friendPaid,
+        });
       }
-      
-      if (friendPaid > friendShare) {
-        // Friend paid more than their share, you owe them
-        _youOwe += (friendPaid - friendShare);
+
+      _payments.clear();
+      double paidToFriend = 0.0;
+      double receivedFromFriend = 0.0;
+      for (final p in paymentsRes) {
+        final pAmt = (p['amount'] as num).toDouble();
+        if (p['from_user_id'] == _currentUserId) {
+          paidToFriend += pAmt;
+        } else {
+          receivedFromFriend += pAmt;
+        }
+        _payments.add(Map<String, dynamic>.from(p));
       }
 
-      _expenses.add({
-        'id': e['id'] as int,
-        'description': e['description'],
-        'amount': amount,
-        'date': DateTime.parse(e['date'] as String),
-        'creator_name': e['creator_name'],
-        'your_share': yourShare,
-        'you_paid': youPaid,
-        'friend_paid': friendPaid,
-      });
-    }
-
-    _netBalance = _youAreOwed - _youOwe;
-  } catch (e) {
-    _error = true;
-    _errorMsg = e.toString();
-  } finally {
-    if (mounted) {
-      setState(() => _loading = false);
+      final net = (expensesYouAreOwed - expensesYouOwe) + (paidToFriend - receivedFromFriend);
+      _netBalance = net;
+      if (net > 0) {
+        _youAreOwed = net;
+        _youOwe = 0.0;
+      } else {
+        _youOwe = net.abs();
+        _youAreOwed = 0.0;
+      }
+    } catch (e) {
+      _error = true;
+      _errorMsg = e.toString();
+    } finally {
+      if (mounted) {
+        setState(() => _loading = false);
+      }
     }
   }
-}
-
-
 
   void _navigateToAddExpense() {
     Navigator.push(
@@ -143,30 +171,46 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
       ),
     );
 
-    if (selectedAmount != null && selectedAmount > 0) {
+    if (selectedAmount != null && selectedAmount > 0 && mounted) {
       setState(() => _loading = true);
       try {
-        // Create a payment record
+        final currencyProvider = Provider.of<CurrencyProvider>(context, listen: false);
+        final currencyCode = currencyProvider.currencyCode;
+        final fromId = _netBalance < 0 ? _currentUserId! : widget.friendId.toString();
+        final toId = _netBalance < 0 ? widget.friendId.toString() : _currentUserId!;
+
+        // 1. Create a payment record
         await _supabase.from('payments').insert({
-          'from_user_id': _netBalance < 0 ? _currentUserId : widget.friendId,
-          'to_user_id': _netBalance < 0 ? widget.friendId : _currentUserId,
+          'from_user_id': fromId,
+          'to_user_id': toId,
           'amount': selectedAmount,
-          'currency': 'USD',
+          'currency': currencyCode,
           'payment_method': 'manual',
           'payment_date': DateTime.now().toIso8601String(),
           'status': 'completed',
           'notes': 'Settlement payment',
         });
 
+        // 2. Adjust balances in database
+        final balanceService = BalanceService();
+        await balanceService.adjustBalance(
+          fromUserId: toId, // creditor
+          toUserId: fromId, // debtor
+          deltaAmount: -selectedAmount, // reduces the debt
+          currency: currencyCode,
+        );
+
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-              content: Text(
-                  'Settlement of ${_currencyFormatter.format(selectedAmount)} recorded')),
+            content: Text('Settlement of ${currencyProvider.format(selectedAmount)} recorded'),
+          ),
         );
 
         // Refresh data
         await _loadFriendDetails();
       } catch (e) {
+        if (!mounted) return;
         setState(() {
           _loading = false;
           _error = true;
@@ -185,6 +229,7 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
     final colorScheme = theme.colorScheme;
     final primaryColor = colorScheme.primary;
     final onPrimaryColor = colorScheme.onPrimary;
+    final currencyProvider = Provider.of<CurrencyProvider>(context);
 
     if (_loading && _friendProfile == null) {
       return const Scaffold(
@@ -243,7 +288,7 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
                         ),
                       ),
                       Text(
-                        _currencyFormatter.format(_netBalance.abs()),
+                        currencyProvider.format(_netBalance.abs()),
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 18,
@@ -275,90 +320,53 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
             ),
           ),
 
-          // Expenses list
+          // Tab views
           Expanded(
             child: TabBarView(
               controller: _tabController,
               children: [
                 // Expenses Tab
                 _expenses.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.receipt_long,
-                              size: 64,
-                              color: Colors.grey.shade400,
-                            ),
-                            const SizedBox(height: 16),
-                            Text(
-                              'No shared expenses yet',
-                              style: theme.textTheme.titleMedium?.copyWith(
-                                color: Colors.grey.shade600,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            ElevatedButton.icon(
-                              onPressed: _navigateToAddExpense,
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: primaryColor,
-                                foregroundColor: onPrimaryColor,
-                              ),
-                              icon: const Icon(Icons.add),
-                              label: const Text('Add an expense'),
-                            ),
-                          ],
-                        ),
-                      )
+                    ? const Center(child: Text('No shared expenses found'))
                     : RefreshIndicator(
                         onRefresh: _loadFriendDetails,
                         child: ListView.builder(
                           itemCount: _expenses.length,
                           itemBuilder: (ctx, i) {
                             final exp = _expenses[i];
-                            final amount = exp['amount'] as num;
-                            final yourShare = exp['your_share'] as num;
-                            final friendShare = amount - yourShare;
-                            final youPaid = exp['you_paid'] as num;
-                            final friendPaid = exp['friend_paid'] as num;
-                            final date = exp['date'] as DateTime;
-
-                            // Calculate what's owed on this specific expense
-                            final friendOwesYou = youPaid > yourShare ? youPaid - yourShare : 0.0;
-                            final youOweFriend = friendPaid > friendShare ? friendPaid - friendShare : 0.0;
-
                             return Card(
-                              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                              margin: const EdgeInsets.symmetric(
+                                  horizontal: 16, vertical: 4),
                               child: ListTile(
                                 leading: CircleAvatar(
-                                  backgroundColor: colorScheme.primaryContainer,
-                                  child: const Icon(Icons.receipt_long),
+                                  backgroundColor:
+                                      primaryColor.withValues(alpha: 0.1),
+                                  child: Icon(Icons.receipt, color: primaryColor),
                                 ),
                                 title: Text(
-                                  exp['description'] as String,
-                                  style: const TextStyle(fontWeight: FontWeight.bold),
+                                  exp['description'],
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.bold),
                                 ),
                                 subtitle: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Text('Total: ${_currencyFormatter.format(amount)}'),
-                                    const SizedBox(height: 2),
-                                    if (friendOwesYou > 0)
-                                      Text(
-                                        '${_friendProfile?['full_name']} owes you ${_currencyFormatter.format(friendOwesYou)}',
-                                        style: const TextStyle(color: Colors.green),
-                                      )
-                                    else if (youOweFriend > 0)
-                                      Text(
-                                        'You owe ${_currencyFormatter.format(youOweFriend)}',
-                                        style: const TextStyle(color: Colors.red),
-                                      )
-                                    else
-                                      const Text('Settled'),
-                                    const SizedBox(height: 2),
+                                    Text(DateFormat.yMMMd()
+                                        .format(exp['date'] as DateTime)),
+                                    Text('Paid by ${exp['creator_name']}'),
+                                  ],
+                                ),
+                                trailing: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                  children: [
                                     Text(
-                                      DateFormat('MMM d, yyyy').format(date),
+                                      currencyProvider.format(exp['amount']),
+                                      style: const TextStyle(
+                                          fontWeight: FontWeight.bold),
+                                    ),
+                                    Text(
+                                      'Your share: ${currencyProvider.format(exp['your_share'])}',
                                       style: TextStyle(
                                         fontSize: 12,
                                         color: Colors.grey.shade600,
@@ -370,7 +378,7 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
                               ),
                             );
                           },
-                        )
+                        ),
                       ),
 
                 // Summary Tab - Payment history and other details
@@ -410,7 +418,7 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
                               ListTile(
                                 title: const Text('Total Amount'),
                                 trailing: Text(
-                                  _currencyFormatter.format(
+                                  currencyProvider.format(
                                       _expenses.fold<double>(
                                           0,
                                           (sum, exp) =>
@@ -425,6 +433,57 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
                           ),
                         ),
                       ),
+                      const SizedBox(height: 16),
+                      Text(
+                        'Recent Settlements',
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      if (_payments.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 8),
+                          child: Text(
+                            'No settlements recorded yet.',
+                            style: TextStyle(color: Colors.grey),
+                          ),
+                        )
+                      else
+                        Card(
+                          child: ListView.separated(
+                            shrinkWrap: true,
+                            physics: const NeverScrollableScrollPhysics(),
+                            itemCount: _payments.length,
+                            separatorBuilder: (_, __) => const Divider(height: 1),
+                            itemBuilder: (ctx, idx) {
+                              final p = _payments[idx];
+                              final isPayer = p['from_user_id'] == _currentUserId;
+                              final pAmt = (p['amount'] as num).toDouble();
+                              final pDate = p['payment_date'] != null
+                                  ? DateTime.parse(p['payment_date'] as String)
+                                  : null;
+                              return ListTile(
+                                leading: CircleAvatar(
+                                  backgroundColor: isPayer ? Colors.orange.shade100 : Colors.green.shade100,
+                                  child: Icon(
+                                    isPayer ? Icons.arrow_upward : Icons.arrow_downward,
+                                    color: isPayer ? Colors.orange.shade800 : Colors.green.shade800,
+                                  ),
+                                ),
+                                title: Text(isPayer ? 'You paid friend' : 'Friend paid you'),
+                                subtitle: pDate != null ? Text(DateFormat.yMMMd().format(pDate)) : null,
+                                trailing: Text(
+                                  currencyProvider.format(pAmt),
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: isPayer ? Colors.orange.shade800 : Colors.green.shade800,
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
                     ],
                   ),
                 ),

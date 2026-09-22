@@ -102,7 +102,7 @@ class _EditPaymentInfoScreenState extends State<EditPaymentInfoScreen> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               DropdownButtonFormField<String>(
-                value: _selectedCurrencyCode,
+                initialValue: _selectedCurrencyCode,
                 decoration:
                     const InputDecoration(labelText: 'Default Currency'),
                 items: CurrencyProvider.availableCurrencies.entries

@@ -230,8 +230,8 @@ class AppTheme {
     chipTheme: ChipThemeData(
       backgroundColor: Colors.grey[200],
       disabledColor: Colors.grey[300],
-      selectedColor: primaryColor.withOpacity(0.2),
-      secondarySelectedColor: primaryColor.withOpacity(0.2),
+      selectedColor: primaryColor.withValues(alpha: 0.2),
+      secondarySelectedColor: primaryColor.withValues(alpha: 0.2),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
       labelStyle: GoogleFonts.inter(
         fontSize: 14,
@@ -245,7 +245,7 @@ class AppTheme {
         borderRadius: BorderRadius.circular(16),
       ),
     ),
-    bottomAppBarTheme: const BottomAppBarTheme(
+    bottomAppBarTheme: const BottomAppBarThemeData(
       color: Colors.white,
       elevation: 8,
     ),
@@ -371,8 +371,8 @@ class AppTheme {
     chipTheme: ChipThemeData(
       backgroundColor: Colors.grey[800],
       disabledColor: Colors.grey[700],
-      selectedColor: primaryColor.withOpacity(0.3),
-      secondarySelectedColor: primaryColor.withOpacity(0.3),
+      selectedColor: primaryColor.withValues(alpha: 0.3),
+      secondarySelectedColor: primaryColor.withValues(alpha: 0.3),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
       labelStyle: GoogleFonts.inter(
         fontSize: 14,
@@ -386,7 +386,7 @@ class AppTheme {
         borderRadius: BorderRadius.circular(16),
       ),
     ),
-    bottomAppBarTheme: const BottomAppBarTheme(
+    bottomAppBarTheme: const BottomAppBarThemeData(
       color: _darkCardColor,
       elevation: 8,
     ),

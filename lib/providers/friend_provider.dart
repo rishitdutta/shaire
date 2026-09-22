@@ -30,25 +30,64 @@ class FriendProvider with ChangeNotifier {
   String? get currentUserId => _supabase.auth.currentUser?.id;
 
   Future<Map<String, double>> getFriendBalance(String friendId) async {
-  final expensesRes = await _supabase.rpc(
-    'get_shared_expenses',
-    params: {
-      'p_current_user_id': currentUserId,
-      'p_friend_id': friendId,
-    },
-  );
-  double youOwe = 0.0, youAreOwed = 0.0;
-  for (final e in expensesRes) {
-    final yourShare = e['your_share'] as num? ?? 0;
-    final youPaid = e['you_paid'] as num? ?? 0;
-    if (yourShare > youPaid) {
-      youOwe += yourShare - youPaid;
-    } else if (yourShare < youPaid) {
-      youAreOwed += youPaid - yourShare;
+    if (currentUserId == null) return {'youOwe': 0.0, 'youAreOwed': 0.0};
+
+    try {
+      final expensesRes = await _supabase.rpc(
+        'get_shared_expenses',
+        params: {
+          'p_current_user_id': currentUserId,
+          'p_friend_id': friendId,
+        },
+      );
+
+      final paymentsRes = await _supabase
+          .from('payments')
+          .select('amount, from_user_id, to_user_id')
+          .or('and(from_user_id.eq.$currentUserId,to_user_id.eq.$friendId),and(from_user_id.eq.$friendId,to_user_id.eq.$currentUserId)');
+
+      double expensesYouOwe = 0.0;
+      double expensesYouAreOwed = 0.0;
+
+      for (final e in expensesRes) {
+        final amount = (e['total_amount'] as num).toDouble();
+        final yourShare = (e['your_share'] as num? ?? 0).toDouble();
+        final friendShare = (e['friend_share'] as num?)?.toDouble() ??
+            (amount > yourShare ? amount - yourShare : 0.0);
+        final youPaid = (e['you_paid'] as num? ?? 0).toDouble();
+        final friendPaid = (e['friend_paid'] as num? ?? 0).toDouble();
+
+        if (youPaid > 0 && friendShare > 0) {
+          final coverage = amount > 0 ? (youPaid / amount).clamp(0.0, 1.0) : 1.0;
+          expensesYouAreOwed += friendShare * coverage;
+        }
+        if (friendPaid > 0 && yourShare > 0) {
+          final coverage = amount > 0 ? (friendPaid / amount).clamp(0.0, 1.0) : 1.0;
+          expensesYouOwe += yourShare * coverage;
+        }
+      }
+
+      double paidToFriend = 0.0;
+      double receivedFromFriend = 0.0;
+      for (final p in paymentsRes) {
+        final amt = (p['amount'] as num).toDouble();
+        if (p['from_user_id'] == currentUserId) {
+          paidToFriend += amt;
+        } else {
+          receivedFromFriend += amt;
+        }
+      }
+
+      final net = (expensesYouAreOwed - expensesYouOwe) + (paidToFriend - receivedFromFriend);
+      return {
+        'youOwe': net < 0 ? net.abs() : 0.0,
+        'youAreOwed': net > 0 ? net : 0.0,
+      };
+    } catch (e) {
+      _logger.e('Error getting friend balance: $e');
+      return {'youOwe': 0.0, 'youAreOwed': 0.0};
     }
   }
-  return {'youOwe': youOwe, 'youAreOwed': youAreOwed};
-}
 
   Future<void> fetchFriendsAndRequests() async {
     if (currentUserId == null) return;

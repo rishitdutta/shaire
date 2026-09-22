@@ -63,19 +63,38 @@ class _HomeScreenState extends State<HomeScreen>
       double getTotalAmount = 0;
       double oweTotalAmount = 0;
 
-      for (var balance in balancesResponse) {
-        final double amount = (balance['amount'] as num).toDouble();
-        if (balance['from_user_id'] == user.id) {
-          if (amount > 0) {
-            getTotalAmount += amount;
+      if (balancesResponse.isNotEmpty) {
+        for (var balance in balancesResponse) {
+          final double amount = (balance['amount'] as num).toDouble();
+          if (balance['from_user_id'] == user.id) {
+            if (amount > 0) {
+              getTotalAmount += amount;
+            } else {
+              oweTotalAmount += -amount;
+            }
           } else {
-            oweTotalAmount += -amount;
+            if (amount > 0) {
+              oweTotalAmount += amount;
+            } else {
+              getTotalAmount += -amount;
+            }
           }
-        } else {
-          if (amount > 0) {
-            oweTotalAmount += amount;
-          } else {
-            getTotalAmount += -amount;
+        }
+      } else {
+        // Fallback: Compute totals dynamically from unsettled expense_participants
+        final myParticipants = await Supabase.instance.client
+            .from('expense_participants')
+            .select('share_amount, paid_amount, settled')
+            .eq('user_id', user.id)
+            .eq('settled', false);
+
+        for (var p in myParticipants) {
+          final paid = (p['paid_amount'] as num).toDouble();
+          final share = (p['share_amount'] as num).toDouble();
+          if (paid > share) {
+            getTotalAmount += (paid - share);
+          } else if (share > paid) {
+            oweTotalAmount += (share - paid);
           }
         }
       }
@@ -85,14 +104,17 @@ class _HomeScreenState extends State<HomeScreen>
           Provider.of<ExpenseProvider>(context, listen: false);
       await expenseProvider.fetchExpenses();
 
+      if (!mounted) return;
       setState(() {
         _youGet = getTotalAmount;
         _youOwe = oweTotalAmount;
         _isLoading = false;
       });
     } catch (e) {
-      print('Error fetching data: $e');
-      setState(() => _isLoading = false);
+      LoggerService.error('Error fetching data in home_screen: $e');
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
@@ -212,7 +234,7 @@ class _HomeScreenState extends State<HomeScreen>
         children: [
           CircleAvatar(
             radius: 16,
-            backgroundColor: iconColor.withOpacity(0.2),
+            backgroundColor: iconColor.withValues(alpha: 0.2),
             child: Icon(
               icon,
               size: 16,
@@ -229,7 +251,7 @@ class _HomeScreenState extends State<HomeScreen>
                       color: Theme.of(context)
                           .colorScheme
                           .onPrimary
-                          .withOpacity(0.8),
+                          .withValues(alpha: 0.8),
                     ),
               ),
               Text(
@@ -495,7 +517,7 @@ class _HomeScreenState extends State<HomeScreen>
               borderRadius: BorderRadius.circular(16),
               boxShadow: [
                 BoxShadow(
-                  color: theme.colorScheme.shadow.withOpacity(0.2),
+                  color: theme.colorScheme.shadow.withValues(alpha: 0.2),
                   blurRadius: 10,
                   offset: const Offset(0, 4),
                 ),
@@ -507,7 +529,7 @@ class _HomeScreenState extends State<HomeScreen>
                 Text(
                   'Total Balance',
                   style: theme.textTheme.titleMedium!.copyWith(
-                    color: theme.colorScheme.onPrimary.withOpacity(0.9),
+                    color: theme.colorScheme.onPrimary.withValues(alpha: 0.9),
                   ),
                 ),
                 const SizedBox(height: 8),

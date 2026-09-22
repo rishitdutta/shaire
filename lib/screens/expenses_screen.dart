@@ -661,7 +661,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                 const SizedBox(width: 24),
                 _buildLegendItem(
                   context,
-                  Theme.of(context).colorScheme.primary.withOpacity(0.8),
+                  Theme.of(context).colorScheme.primary.withValues(alpha: 0.8),
                   'This week',
                 ),
                 const SizedBox(width: 24),
@@ -807,7 +807,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   Color _getBarColor(BuildContext context, int index) {
     // Current week (highlighted)
     if (index == _currentWeekIndex) {
-      return Theme.of(context).colorScheme.primary.withOpacity(0.8);
+      return Theme.of(context).colorScheme.primary.withValues(alpha: 0.8);
     }
     // Past weeks
     else if (index < _currentWeekIndex) {
@@ -1172,7 +1172,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                       Theme.of(context)
                           .colorScheme
                           .primary
-                          .withOpacity(0.7 + (0.3 * percent / 100)),
+                          .withValues(alpha: 0.7 + (0.3 * percent / 100)),
                     ),
                     minHeight: 6,
                   ),

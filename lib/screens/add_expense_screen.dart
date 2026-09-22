@@ -10,6 +10,7 @@ import '../services/bill_service.dart';
 import '../services/logger_service.dart';
 import '../providers/currency_provider.dart';
 import '../database/receipt.dart';
+import '../database/balance.dart';
 import 'package:provider/provider.dart';
 import 'package:image/image.dart' as img;
 
@@ -346,7 +347,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
             ),
             filled: true,
             fillColor: Theme.of(context).brightness == Brightness.dark
-                ? Theme.of(context).cardColor.withOpacity(0.5)
+                ? Theme.of(context).cardColor.withValues(alpha: 0.5)
                 : Colors.grey.shade200,
           ),
         ),
@@ -487,7 +488,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
 
         // Category
         DropdownButtonFormField<String>(
-          value: _selectedCategory,
+          initialValue: _selectedCategory,
           decoration: const InputDecoration(
             labelText: 'Category',
             border: OutlineInputBorder(),
@@ -1337,17 +1338,26 @@ Future<File> _compressImage(File file) async {
         // Convert the string category to an integer ID
         int? categoryId = _getCategoryId(_selectedCategory);
 
+        // Determine effective group ID if a group contact or widget.groupId is present
+        int? effectiveGroupId = widget.groupId;
+        if (effectiveGroupId == null) {
+          final groupContact = _selectedContactsData.where((c) => c['isGroup'] == true).firstOrNull;
+          if (groupContact != null) {
+            effectiveGroupId = groupContact['id'] as int?;
+          }
+        }
+
         // Create the expense
         final now = DateTime.now();
+        final currencyCode = Provider.of<CurrencyProvider>(context, listen: false).currencyCode;
         final newExpense = Expense(
           id: 0,
           description: _descriptionController.text,
           totalAmount: double.parse(_totalAmountController.text),
-          currency: Provider.of<CurrencyProvider>(context, listen: false)
-              .currencyCode,
+          currency: currencyCode,
           date: _selectedDate,
           createdBy: user.id,
-          groupId: widget.groupId,
+          groupId: effectiveGroupId,
           categoryId: categoryId,
           receiptImageUrl: null,
           splitType: _getSplitTypeString(_splitType),
@@ -1361,35 +1371,32 @@ Future<File> _compressImage(File file) async {
 
         if (success) {
           final expenseId = expenseProvider.lastInsertedId;
-          final splitType = _splitType; // Capture current value
-          final selectedContacts = List<Map<String, dynamic>>.from(
-              _selectedContactsData); // Create a copy
+          final splitType = _splitType;
+          final selectedContacts = List<Map<String, dynamic>>.from(_selectedContactsData);
           final Map<String, String> manualAmounts = {};
           final Map<String, String> percentageAmounts = {};
 
-          // Extract controller values safely
           for (final contact in selectedContacts) {
             final id = contact['id'].toString();
             manualAmounts[id] = _individualAmountControllers[id]?.text ?? '0';
-            percentageAmounts[id] =
-                _individualPercentControllers[id]?.text ?? '0';
+            percentageAmounts[id] = _individualPercentControllers[id]?.text ?? '0';
           }
-          // Capture 'you' controllers if they exist (adjust keys if needed)
-          manualAmounts['you'] =
-              _individualAmountControllers['you']?.text ?? '';
-          percentageAmounts['you'] =
-              _individualPercentControllers['you']?.text ?? '';
+          manualAmounts['you'] = _individualAmountControllers['you']?.text ?? '';
+          percentageAmounts['you'] = _individualPercentControllers['you']?.text ?? '';
 
           // Save participants
           try {
-            await _saveExpenseParticipantsWithoutContext(
-                expenseId,
-                user.id,
-                double.parse(_totalAmountController.text),
-                splitType,
-                selectedContacts,
-                manualAmounts,
-                percentageAmounts);
+            await _saveExpenseParticipants(
+              expenseId: expenseId,
+              currentUserId: user.id,
+              totalAmount: double.parse(_totalAmountController.text),
+              splitType: splitType,
+              selectedContacts: selectedContacts,
+              manualAmounts: manualAmounts,
+              percentageAmounts: percentageAmounts,
+              currencyCode: currencyCode,
+              groupId: effectiveGroupId,
+            );
             if (!mounted) return;
           } catch (e) {
             LoggerService.error('Error saving participants', e);
@@ -1403,8 +1410,7 @@ Future<File> _compressImage(File file) async {
 
           // Link receipt if available
           if (_currentReceiptId != null) {
-            await _receiptService.linkReceiptToExpense(
-                _currentReceiptId!, expenseId);
+            await _receiptService.linkReceiptToExpense(_currentReceiptId!, expenseId);
           }
           if (!mounted) return;
 
@@ -1428,248 +1434,119 @@ Future<File> _compressImage(File file) async {
     }
   }
 
-  Future<void> _saveExpenseParticipantsWithoutContext(
-      int expenseId,
-      String currentUserId,
-      double totalAmount,
-      SplitType splitType, // Receive as parameter
-      List<Map<String, dynamic>> selectedContactsData, // Receive as parameter
-      Map<String, String> individualAmountTexts, // Receive as parameter
-      Map<String, String> individualPercentTexts // Receive as parameter
-      ) async {
-    List<Map<String, dynamic>> participants = [];
-    double yourAmount = 0;
+  Future<void> _saveExpenseParticipants({
+    required int expenseId,
+    required String currentUserId,
+    required double totalAmount,
+    required SplitType splitType,
+    required List<Map<String, dynamic>> selectedContacts,
+    required Map<String, String> manualAmounts,
+    required Map<String, String> percentageAmounts,
+    required String currencyCode,
+    int? groupId,
+  }) async {
+    // 1. Gather all participant user IDs (expanding group members if a group is selected)
+    final Set<String> participantIds = {currentUserId};
 
-    // Use the passed parameters instead of state variables
+    for (final contact in selectedContacts) {
+      if (contact['isGroup'] == true) {
+        final gId = contact['id'];
+        final members = await _supabase
+            .from('group_members')
+            .select('user_id')
+            .eq('group_id', gId);
+        for (final m in members) {
+          final uid = m['user_id'] as String?;
+          if (uid != null && uid.isNotEmpty) {
+            participantIds.add(uid);
+          }
+        }
+      } else {
+        final uid = contact['id'].toString();
+        participantIds.add(uid);
+      }
+    }
+
+    if (groupId != null) {
+      final members = await _supabase
+          .from('group_members')
+          .select('user_id')
+          .eq('group_id', groupId);
+      for (final m in members) {
+        final uid = m['user_id'] as String?;
+        if (uid != null && uid.isNotEmpty) {
+          participantIds.add(uid);
+        }
+      }
+    }
+
+    final int count = participantIds.length;
+    final Map<String, double> userShares = {};
+
     switch (splitType) {
       case SplitType.equal:
-        final perPersonAmount = totalAmount / (selectedContactsData.length + 1);
-        yourAmount = perPersonAmount;
-
-        participants.add({
-          'expense_id': expenseId,
-          'user_id': currentUserId,
-          'share_amount': perPersonAmount,
-          'paid_amount': totalAmount,
-          'settled': false,
-        });
-
-        for (final contact in selectedContactsData) {
-          // Use parameter
-          if (contact['isGroup'] == true) continue;
-          participants.add({
-            'expense_id': expenseId,
-            'user_id': contact['id'],
-            'share_amount': perPersonAmount,
-            'paid_amount': 0,
-            'settled': false,
-          });
+        final perPerson = totalAmount / count;
+        for (final uid in participantIds) {
+          userShares[uid] = perPerson;
         }
         break;
 
       case SplitType.manual:
-        for (final contact in selectedContactsData) {
-          // Use parameter
-          if (contact['isGroup'] == true) continue;
-          final id = contact['id'].toString();
-          final amount = double.tryParse(individualAmountTexts[id] ?? '0') ??
-              0; // Use parameter
-
-          participants.add({
-            'expense_id': expenseId,
-            'user_id': contact['id'],
-            'share_amount': amount,
-            'paid_amount': 0,
-            'settled': false,
-          });
+        double totalAssigned = 0.0;
+        for (final uid in participantIds) {
+          if (uid == currentUserId) continue;
+          final amount = double.tryParse(manualAmounts[uid] ?? '0') ?? 0.0;
+          userShares[uid] = amount;
+          totalAssigned += amount;
         }
-
-        final yourAmountStr = individualAmountTexts['you']; // Use parameter
-        yourAmount = yourAmountStr != null && yourAmountStr.isNotEmpty
-            ? double.parse(yourAmountStr)
-            : totalAmount -
-                participants.fold(
-                    0.0, (sum, p) => sum + (p['share_amount'] as double));
-
-        participants.add({
-          'expense_id': expenseId,
-          'user_id': currentUserId,
-          'share_amount': yourAmount,
-          'paid_amount': totalAmount,
-          'settled': false,
-        });
+        final yourAmt = double.tryParse(manualAmounts['you'] ?? '') ?? (totalAmount - totalAssigned);
+        userShares[currentUserId] = yourAmt;
         break;
 
       case SplitType.percentage:
-        for (final contact in selectedContactsData) {
-          // Use parameter
-          if (contact['isGroup'] == true) continue;
-          final id = contact['id'].toString();
-          final percentageStr =
-              individualPercentTexts[id] ?? '0'; // Use parameter
-          final percentage = double.tryParse(percentageStr) ?? 0;
-          final amount = (percentage / 100) * totalAmount;
-
-          participants.add({
-            'expense_id': expenseId,
-            'user_id': contact['id'],
-            'share_amount': amount,
-            'paid_amount': 0,
-            'settled': false,
-          });
+        for (final uid in participantIds) {
+          if (uid == currentUserId) continue;
+          final pct = double.tryParse(percentageAmounts[uid] ?? '0') ?? 0.0;
+          userShares[uid] = (pct / 100.0) * totalAmount;
         }
-
-        final yourPercStr = individualPercentTexts['you']; // Use parameter
-        final yourPerc = double.tryParse(yourPercStr ?? '0') ?? 0;
-        yourAmount = (yourPerc / 100) * totalAmount;
-
-        participants.add({
-          'expense_id': expenseId,
-          'user_id': currentUserId,
-          'share_amount': yourAmount,
-          'paid_amount': totalAmount,
-          'settled': false,
-        });
+        final yourPct = double.tryParse(percentageAmounts['you'] ?? '0') ?? 0.0;
+        userShares[currentUserId] = (yourPct / 100.0) * totalAmount;
         break;
     }
 
-    LoggerService.debug('Participants to be added: $participants');
+    // Build participant rows
+    final participants = participantIds.map((uid) {
+      return {
+        'expense_id': expenseId,
+        'user_id': uid,
+        'share_amount': userShares[uid] ?? 0.0,
+        'paid_amount': (uid == currentUserId) ? totalAmount : 0.0,
+        'settled': false,
+      };
+    }).toList();
 
-    // Insert all participants
+    LoggerService.debug('Inserting ${participants.length} participants for expense $expenseId');
     await _supabase.from('expense_participants').insert(participants);
 
-    // No mounted check needed here as we don't access context/state afterwards
-    LoggerService.info(
-        'Successfully added ${participants.length} participants to expense $expenseId');
-    // IMPORTANT: Do NOT add mounted checks or UI updates here.
-  }
-
-  Future<void> _saveExpenseParticipants(int expenseId) async {
-    try {
-      final totalAmount = double.parse(_totalAmountController.text);
-      final currentUserId = _supabase.auth.currentUser?.id;
-      if (currentUserId == null) return;
-
-      // Calculate participant shares based on split type
-      List<Map<String, dynamic>> participants = [];
-
-      // Add current user (who paid)
-      double yourAmount = 0;
-
-      switch (_splitType) {
-        case SplitType.equal:
-          final perPersonAmount =
-              totalAmount / (_selectedContactsData.length + 1);
-          yourAmount = perPersonAmount;
-
-          participants.add({
-            'expense_id': expenseId,
-            'user_id': currentUserId,
-            'share_amount': perPersonAmount,
-            'paid_amount': totalAmount, // Current user paid full amount
-            'settled': false,
-          });
-
-          // Add friends/groups with their share
-          for (final contact in _selectedContactsData) {
-            if (contact['isGroup'] == true) {
-              // Skip groups for now (we'd need to handle group members separately)
-              continue;
-            }
-
-            participants.add({
-              'expense_id': expenseId,
-              'user_id': contact['id'],
-              'share_amount': perPersonAmount,
-              'paid_amount': 0, // They haven't paid
-              'settled': false,
-            });
-          }
-          break;
-
-        case SplitType.manual:
-          // Get amounts from text controllers
-          for (final contact in _selectedContactsData) {
-            final id = contact['id'].toString();
-            final amount = double.tryParse(
-                    _individualAmountControllers[id]?.text ?? '0') ??
-                0;
-
-            if (contact['isGroup'] == true) continue; // Skip groups
-
-            participants.add({
-              'expense_id': expenseId,
-              'user_id': contact['id'],
-              'share_amount': amount,
-              'paid_amount': 0,
-              'settled': false,
-            });
-          }
-
-          // Current user's share is either specified or calculated from remaining amount
-          final yourAmountStr = _individualAmountControllers['you']?.text;
-          yourAmount = yourAmountStr != null && yourAmountStr.isNotEmpty
-              ? double.parse(yourAmountStr)
-              : totalAmount -
-                  participants.fold(
-                      0.0, (sum, p) => sum + (p['share_amount'] as double));
-
-          participants.add({
-            'expense_id': expenseId,
-            'user_id': currentUserId,
-            'share_amount': yourAmount,
-            'paid_amount': totalAmount, // Current user paid full amount
-            'settled': false,
-          });
-          break;
-
-        case SplitType.percentage:
-          // Calculate amounts from percentages
-          for (final contact in _selectedContactsData) {
-            final id = contact['id'].toString();
-            final percentageStr =
-                _individualPercentControllers[id]?.text ?? '0';
-            final percentage = double.tryParse(percentageStr) ?? 0;
-            final amount = (percentage / 100) * totalAmount;
-
-            if (contact['isGroup'] == true) continue; // Skip groups
-
-            participants.add({
-              'expense_id': expenseId,
-              'user_id': contact['id'],
-              'share_amount': amount,
-              'paid_amount': 0,
-              'settled': false,
-            });
-          }
-
-          // Current user's percentage & share
-          final yourPercStr = _individualPercentControllers['you']?.text ?? '0';
-          final yourPerc = double.tryParse(yourPercStr) ?? 0;
-          yourAmount = (yourPerc / 100) * totalAmount;
-
-          participants.add({
-            'expense_id': expenseId,
-            'user_id': currentUserId,
-            'share_amount': yourAmount,
-            'paid_amount': totalAmount, // Current user paid full amount
-            'settled': false,
-          });
-          break;
+    // Update balances table for each non-payer participant
+    final balanceService = BalanceService();
+    for (final p in participants) {
+      final uid = p['user_id'] as String;
+      if (uid != currentUserId) {
+        final share = (p['share_amount'] as num).toDouble();
+        if (share > 0) {
+          await balanceService.adjustBalance(
+            fromUserId: currentUserId,
+            toUserId: uid,
+            deltaAmount: share,
+            currency: currencyCode,
+            groupId: groupId,
+          );
+        }
       }
-
-      LoggerService.debug('Participants to be added: $participants');
-
-      if (!mounted) return;
-
-      // Insert all participants
-      await _supabase.from('expense_participants').insert(participants);
-      LoggerService.info(
-          'Successfully added ${participants.length} participants to expense $expenseId');
-    } catch (e) {
-      LoggerService.error('Error saving expense participants', e);
-      rethrow;
     }
+
+    LoggerService.info('Successfully added ${participants.length} participants and updated balances for expense $expenseId');
   }
 
   Future<void> _ensureUserProfileExists(String userId) async {

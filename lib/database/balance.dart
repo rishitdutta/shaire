@@ -1,4 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../services/logger_service.dart';
 
 class Balance {
   final int id;
@@ -24,9 +25,9 @@ class Balance {
       id: json['id'],
       fromUserId: json['from_user_id'],
       toUserId: json['to_user_id'],
-      amount: (json['amount'] as num).toDouble(),  // Ensure double conversion
+      amount: (json['amount'] as num).toDouble(),
       currency: json['currency'],
-      groupId: json['group_id'] as int?,  // Handle nullable int
+      groupId: json['group_id'] as int?,
       lastUpdated: DateTime.parse(json['last_updated']),
     );
   }
@@ -58,14 +59,56 @@ class BalanceService {
           .maybeSingle();
 
       if (response == null) {
-        print('No balance found');
+        LoggerService.debug('No balance found between $fromUserId and $toUserId');
         return null;
       }
 
       return Balance.fromJson(response);
     } catch (error) {
-      print('Error fetching balance: $error');
+      LoggerService.error('Error fetching balance: $error');
       return null;
+    }
+  }
+
+  /// Adjust balance between two users by deltaAmount (positive = toUserId owes fromUserId)
+  Future<void> adjustBalance({
+    required String fromUserId,
+    required String toUserId,
+    required double deltaAmount,
+    required String currency,
+    int? groupId,
+  }) async {
+    if (fromUserId == toUserId || deltaAmount == 0) return;
+    try {
+      final existing = await supabase
+          .from('balances')
+          .select('*')
+          .or('and(from_user_id.eq.$fromUserId,to_user_id.eq.$toUserId),and(from_user_id.eq.$toUserId,to_user_id.eq.$fromUserId)')
+          .maybeSingle();
+
+      if (existing == null) {
+        await supabase.from('balances').insert({
+          'from_user_id': fromUserId,
+          'to_user_id': toUserId,
+          'amount': deltaAmount,
+          'currency': currency,
+          'group_id': groupId,
+          'last_updated': DateTime.now().toIso8601String(),
+        });
+      } else {
+        final existingFrom = existing['from_user_id'] as String;
+        final currentAmount = (existing['amount'] as num).toDouble();
+        final double newAmount = existingFrom == fromUserId
+            ? currentAmount + deltaAmount
+            : currentAmount - deltaAmount;
+
+        await supabase.from('balances').update({
+          'amount': newAmount,
+          'last_updated': DateTime.now().toIso8601String(),
+        }).eq('id', existing['id']);
+      }
+    } catch (e) {
+      LoggerService.error('Error adjusting balance: $e');
     }
   }
 
@@ -73,10 +116,10 @@ class BalanceService {
   Future<bool> createBalance(Balance balance) async {
     try {
       await supabase.from('balances').insert(balance.toJson());
-      print('Balance created successfully');
+      LoggerService.info('Balance created successfully');
       return true;
     } catch (error) {
-      print('Error creating balance: $error');
+      LoggerService.error('Error creating balance: $error');
       return false;
     }
   }
@@ -89,10 +132,10 @@ class BalanceService {
           .update(balance.toJson())
           .eq('id', balance.id);
 
-      print('Balance updated successfully');
+      LoggerService.info('Balance updated successfully');
       return true;
     } catch (error) {
-      print('Error updating balance: $error');
+      LoggerService.error('Error updating balance: $error');
       return false;
     }
   }
@@ -101,11 +144,12 @@ class BalanceService {
   Future<bool> deleteBalance(int id) async {
     try {
       await supabase.from('balances').delete().eq('id', id);
-      print('Balance deleted successfully');
+      LoggerService.info('Balance deleted successfully');
       return true;
     } catch (error) {
-      print('Error deleting balance: $error');
+      LoggerService.error('Error deleting balance: $error');
       return false;
     }
   }
 }
+
