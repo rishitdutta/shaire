@@ -1,5 +1,7 @@
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pdf/widgets.dart' as pw;
 import 'package:shaire/services/pdf_service.dart';
 import 'package:shaire/widgets/receipt_scanner_section.dart';
 
@@ -66,5 +68,27 @@ void main() {
     // PDF header is '%PDF-'
     final header = String.fromCharCodes(pdfBytes.take(5));
     expect(header, equals('%PDF-'));
+  });
+
+  test('logo-full-dark.svg renders cleanly in pw.SvgImage', () async {
+    final file = File('assets/images/logo-full-dark.svg');
+    expect(file.existsSync(), isTrue);
+    final svgContent = await file.readAsString();
+
+    final doc = pw.Document();
+    doc.addPage(
+      pw.Page(
+        build: (context) => pw.Center(
+          child: pw.Container(
+            height: 50,
+            child: pw.SvgImage(svg: svgContent),
+          ),
+        ),
+      ),
+    );
+
+    final bytes = await doc.save();
+    expect(bytes, isNotNull);
+    expect(bytes.length, greaterThan(100));
   });
 }

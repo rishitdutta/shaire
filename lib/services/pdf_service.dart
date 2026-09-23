@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:intl/intl.dart';
@@ -21,16 +22,32 @@ class PdfService {
   }) async {
     final pdf = pw.Document();
 
-    // Load full logo image if available
+    // Load logo-full-dark.svg (clean vector logo without drop shadows)
+    String? logoSvg;
     pw.MemoryImage? logoImage;
     try {
-      final byteData = await rootBundle.load('assets/images/logo-full.png');
-      logoImage = pw.MemoryImage(byteData.buffer.asUint8List());
+      logoSvg = await rootBundle.loadString('assets/images/logo-full-dark.svg');
     } catch (_) {
       try {
-        final byteData = await rootBundle.load('assets/images/logo.png');
-        logoImage = pw.MemoryImage(byteData.buffer.asUint8List());
+        final file = File('assets/images/logo-full-dark.svg');
+        if (file.existsSync()) {
+          logoSvg = await file.readAsString();
+        }
       } catch (_) {}
+    }
+
+    if (logoSvg == null) {
+      try {
+        final byteData = await rootBundle.load('assets/images/logo-full.png');
+        logoImage = pw.MemoryImage(byteData.buffer.asUint8List());
+      } catch (_) {
+        try {
+          final file = File('assets/images/logo-full.png');
+          if (file.existsSync()) {
+            logoImage = pw.MemoryImage(await file.readAsBytes());
+          }
+        } catch (_) {}
+      }
     }
 
     final dateFormat = DateFormat('dd MMM yyyy, hh:mm a');
@@ -82,11 +99,17 @@ class PdfService {
             pw.Center(
               child: pw.Column(
                 children: [
-                  if (logoImage != null)
+                  if (logoSvg != null)
                     pw.Container(
-                      height: 48,
+                      height: 44,
                       margin: const pw.EdgeInsets.only(bottom: 8),
-                      child: pw.Image(logoImage),
+                      child: pw.SvgImage(svg: logoSvg, fit: pw.BoxFit.contain),
+                    )
+                  else if (logoImage != null)
+                    pw.Container(
+                      height: 44,
+                      margin: const pw.EdgeInsets.only(bottom: 8),
+                      child: pw.Image(logoImage, fit: pw.BoxFit.contain),
                     )
                   else
                     pw.Text(
@@ -332,30 +355,37 @@ class PdfService {
             // Attached Original Receipt / Bill Image (if present)
             if (receiptImageBytes != null) ...[
               pw.SizedBox(height: 16),
-              _buildDashedLine(),
-              pw.SizedBox(height: 8),
-              pw.Text(
-                'ATTACHED ORIGINAL RECEIPT / BILL',
-                style: pw.TextStyle(
-                  fontSize: 11,
-                  fontWeight: pw.FontWeight.bold,
-                  letterSpacing: 1.2,
-                  color: PdfColors.grey800,
-                ),
-              ),
-              pw.SizedBox(height: 8),
-              pw.Center(
-                child: pw.Container(
-                  constraints: const pw.BoxConstraints(maxHeight: 380),
-                  decoration: pw.BoxDecoration(
-                    border: pw.Border.all(color: PdfColors.grey400, width: 0.8),
-                    borderRadius: const pw.BorderRadius.all(pw.Radius.circular(6)),
-                  ),
-                  padding: const pw.EdgeInsets.all(6),
-                  child: pw.Image(
-                    pw.MemoryImage(receiptImageBytes),
-                    fit: pw.BoxFit.contain,
-                  ),
+              pw.Inseparable(
+                child: pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    _buildDashedLine(),
+                    pw.SizedBox(height: 8),
+                    pw.Text(
+                      'ATTACHED ORIGINAL RECEIPT / BILL',
+                      style: pw.TextStyle(
+                        fontSize: 11,
+                        fontWeight: pw.FontWeight.bold,
+                        letterSpacing: 1.2,
+                        color: PdfColors.grey800,
+                      ),
+                    ),
+                    pw.SizedBox(height: 8),
+                    pw.Center(
+                      child: pw.Container(
+                        constraints: const pw.BoxConstraints(maxHeight: 380),
+                        decoration: pw.BoxDecoration(
+                          border: pw.Border.all(color: PdfColors.grey400, width: 0.8),
+                          borderRadius: const pw.BorderRadius.all(pw.Radius.circular(6)),
+                        ),
+                        padding: const pw.EdgeInsets.all(6),
+                        child: pw.Image(
+                          pw.MemoryImage(receiptImageBytes),
+                          fit: pw.BoxFit.contain,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],

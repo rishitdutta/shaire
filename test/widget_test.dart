@@ -7,24 +7,54 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
-import 'package:shaire/main.dart';
+import 'package:provider/provider.dart';
+import 'package:shaire/providers/currency_provider.dart';
+import 'package:shaire/widgets/receipt_scanner_section.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  testWidgets('ReceiptScannerSection renders empty and with items', (WidgetTester tester) async {
+    await tester.pumpWidget(
+      ChangeNotifierProvider(
+        create: (_) => CurrencyProvider(),
+        child: MaterialApp(
+          home: Scaffold(
+            body: ReceiptScannerSection(
+              billEntries: [],
+              onBatchAssign: () {},
+              onEditItem: (entry, index) {},
+            ),
+          ),
+        ),
+      ),
+    );
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    // Empty state should render nothing
+    expect(find.text('Receipt Items'), findsNothing);
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
+    // Now render with an entry
+    await tester.pumpWidget(
+      ChangeNotifierProvider(
+        create: (_) => CurrencyProvider(),
+        child: MaterialApp(
+          home: Scaffold(
+            body: ReceiptScannerSection(
+              billEntries: [
+                BillEntry(
+                  description: 'Garlic Naan',
+                  amount: 60.0,
+                  assignedTo: ['You'],
+                  type: BillEntryType.item,
+                ),
+              ],
+              onBatchAssign: () {},
+              onEditItem: (entry, index) {},
+            ),
+          ),
+        ),
+      ),
+    );
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    expect(find.text('Receipt Items'), findsOneWidget);
+    expect(find.text('Garlic Naan'), findsOneWidget);
   });
 }

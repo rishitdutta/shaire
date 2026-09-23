@@ -71,6 +71,8 @@ flutter:
     - assets/images/logo.svg
     - assets/images/logo_text.svg
     - assets/images/logo-full.png
+    - assets/images/logo-full-dark.svg
+    - assets/images/logo-full-light.svg
   # assets:
   #   - images/a_dot_burr.jpeg
   #   - images/a_dot_ham.jpeg

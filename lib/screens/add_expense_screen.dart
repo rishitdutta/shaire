@@ -349,14 +349,18 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
   }
 
   Widget _buildMainContent() {
-    return Form(
-      key: _formKey,
-      child: Column(
-        children: [
-          Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
+    return GestureDetector(
+      onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
+      behavior: HitTestBehavior.translucent,
+      child: Form(
+        key: _formKey,
+        child: Column(
+          children: [
+            Expanded(
+              child: SingleChildScrollView(
+                keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   ContactSelectorSection(
@@ -395,6 +399,8 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
                         : null,
                     onEditItem: _assignItemToContacts,
                     onDownloadPdf: _downloadSplitPdf,
+                    onAddCharge: _showAddCustomChargeDialog,
+                    onDeleteItem: _deleteBillEntry,
                   ),
                   const SizedBox(height: 80), // Space for button
                 ],
@@ -402,6 +408,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
             ),
           ),
         ],
+        ),
       ),
     );
   }
@@ -732,6 +739,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
   }
 
   void _showBatchAssignmentOptions() {
+    FocusManager.instance.primaryFocus?.unfocus();
     showModalBottomSheet(
       context: context,
       builder: (context) => Padding(
@@ -841,12 +849,16 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
   }
 
   void _updateAmountsBasedOnItemAssignments() {
-  // Skip if no items or contacts
-  if (_billEntries.isEmpty || _selectedContactsData.isEmpty) return;
-  
-  // Switch to manual split
-  _tabController.animateTo(SplitType.manual.index);
-  _splitType = SplitType.manual;
+    // Skip if no items or contacts
+    if (_billEntries.isEmpty || _selectedContactsData.isEmpty) return;
+    
+    // Switch to manual split without triggering repeated tab animations if already manual
+    if (_splitType != SplitType.manual) {
+      _splitType = SplitType.manual;
+      if (_tabController.index != SplitType.manual.index) {
+        _tabController.index = SplitType.manual.index;
+      }
+    }
   
   // Calculate amounts per person based on item assignments
   Map<String, double> personAmounts = {};
@@ -864,9 +876,15 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
     // Split item amount equally among assignees
     final perPersonAmount = item.amount / item.assignedTo.length;
     
-    // Add to each person's total
+    // Subtract for discounts, add for taxes/items
     for (final assignee in item.assignedTo) {
-      personAmounts[assignee] = (personAmounts[assignee] ?? 0) + perPersonAmount;
+      if (item.type == BillEntryType.discount) {
+        personAmounts[assignee] =
+            (personAmounts[assignee] ?? 0) - perPersonAmount;
+      } else {
+        personAmounts[assignee] =
+            (personAmounts[assignee] ?? 0) + perPersonAmount;
+      }
     }
   }
   
@@ -874,19 +892,100 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
   for (final contact in _selectedContactsData) {
     final id = contact['id'].toString();
     final name = contact['name'] as String;
+    final amt = personAmounts[name] ?? 0;
     _individualAmountControllers[id]?.text = 
-        (personAmounts[name] ?? 0).toStringAsFixed(2);
+        (amt < 0 ? 0.0 : amt).toStringAsFixed(2);
   }
   
   // Update "You" controller
+  final yourAmt = personAmounts['You'] ?? 0;
   _individualAmountControllers['you']?.text = 
-      (personAmounts['You'] ?? 0).toStringAsFixed(2);
+      (yourAmt < 0 ? 0.0 : yourAmt).toStringAsFixed(2);
   
   setState(() {});
 }
 
+  void _recalculateTotalFromBillEntries() {
+    if (_billEntries.isEmpty) return;
+
+    double calculatedTotal = 0.0;
+    for (final entry in _billEntries) {
+      if (entry.type == BillEntryType.discount) {
+        calculatedTotal -= entry.amount;
+      } else {
+        calculatedTotal += entry.amount;
+      }
+    }
+
+    if (calculatedTotal > 0) {
+      _totalAmountController.text = calculatedTotal.toStringAsFixed(2);
+      _updateSplitAmounts();
+    }
+  }
+
+  void _showAddCustomChargeDialog() {
+    FocusManager.instance.primaryFocus?.unfocus();
+
+    final allNames =
+        _selectedContactsData.map((c) => c['name'] as String).toList();
+    allNames.add('You');
+
+    showDialog(
+      context: context,
+      builder: (context) => AddCustomChargeDialog(
+        allNames: allNames,
+        onAdd: ({
+          required String description,
+          required double amount,
+          required BillEntryType type,
+          required List<String> assignedTo,
+        }) {
+          FocusManager.instance.primaryFocus?.unfocus();
+          setState(() {
+            _billEntries.add(
+              BillEntry(
+                description: description,
+                amount: amount,
+                assignedTo: assignedTo,
+                type: type,
+              ),
+            );
+
+            _recalculateTotalFromBillEntries();
+            _updateAmountsBasedOnItemAssignments();
+          });
+
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Added "$description" successfully!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  void _deleteBillEntry(int index) {
+    if (index >= 0 && index < _billEntries.length) {
+      final removed = _billEntries[index];
+      setState(() {
+        _billEntries.removeAt(index);
+        _recalculateTotalFromBillEntries();
+        _updateAmountsBasedOnItemAssignments();
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Removed "${removed.description}"'),
+        ),
+      );
+    }
+  }
 
   void _assignItemToContacts(BillEntry item, int index) {
+    FocusManager.instance.primaryFocus?.unfocus();
+
     // Get all available names
     final allNames = _selectedContactsData.map((c) => c['name'] as String).toList();
     allNames.add('You'); // Add current user
@@ -898,6 +997,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
         allNames: allNames,
         initialSelectedNames: List<String>.from(item.assignedTo),
         onSave: (selectedNames) {
+          FocusManager.instance.primaryFocus?.unfocus();
           setState(() {
             _billEntries[index] = BillEntry(
               description: item.description,
