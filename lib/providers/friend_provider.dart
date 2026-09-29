@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../database/payment.dart';
 import '../services/logger_service.dart';
+import '../services/custom_friend_balance_service.dart';
 
 class FriendProvider with ChangeNotifier {
   final SupabaseClient _supabase = Supabase.instance.client;
@@ -146,7 +147,8 @@ class FriendProvider with ChangeNotifier {
         if (linkedId != null && _friendBalances.containsKey(linkedId)) {
           _friendBalances[c['id']] = _friendBalances[linkedId]!;
         } else {
-          _friendBalances[c['id']] = {'youOwe': 0.0, 'youAreOwed': 0.0};
+          _friendBalances[c['id']] =
+              await CustomFriendBalanceService.getBalance(c['id'].toString());
         }
       }
 
@@ -284,7 +286,7 @@ class FriendProvider with ChangeNotifier {
     }
   }
 
-  Future<void> addCustomFriend(String name) async {
+  Future<Map<String, dynamic>> addCustomFriend(String name) async {
     if (currentUserId == null) throw Exception("Not logged in");
     final trimmed = name.trim();
     if (trimmed.isEmpty) throw Exception("Please enter a name");
@@ -293,12 +295,27 @@ class FriendProvider with ChangeNotifier {
     notifyListeners();
 
     try {
-      await _supabase.from('custom_friends').insert({
-        'user_id': currentUserId,
+      final res = await _supabase
+          .from('custom_friends')
+          .insert({
+            'user_id': currentUserId,
+            'name': trimmed,
+          })
+          .select()
+          .single();
+
+      final newFriend = {
+        'id': res['id'].toString(),
         'name': trimmed,
-      });
+        'username': null,
+        'avatar_url': null,
+        'is_custom': true,
+        'linked_user_id': null,
+        'isGroup': false,
+      };
 
       await fetchFriendsAndRequests();
+      return newFriend;
     } catch (e) {
       LoggerService.error("Error adding custom friend", e);
       _isLoading = false;
@@ -382,94 +399,164 @@ class FriendProvider with ChangeNotifier {
     final userId = currentUserId;
     if (userId == null) throw Exception("Not logged in");
 
+    final friendIdStr = friendId.toString();
+    final isUuid = RegExp(
+            r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
+        .hasMatch(friendIdStr);
+
     // 1. Fetch friend profile
     Map<String, dynamic>? profile;
-    try {
-      final profileRes = await _supabase
-          .from('profiles')
-          .select('full_name, username, avatar_url')
-          .eq('id', friendId)
-          .maybeSingle();
+    if (isUuid) {
+      try {
+        final profileRes = await _supabase
+            .from('profiles')
+            .select('full_name, username, avatar_url')
+            .eq('id', friendId)
+            .maybeSingle();
 
-      if (profileRes != null) {
-        profile = profileRes;
-      } else {
+        if (profileRes != null) {
+          profile = {
+            'id': friendIdStr,
+            'full_name': profileRes['full_name'],
+            'username': profileRes['username'],
+            'avatar_url': profileRes['avatar_url'],
+            'is_custom': false,
+            'linked_user_id': null,
+          };
+        }
+      } catch (e) {
+        LoggerService.warning('Error fetching profile for $friendId: $e');
+      }
+    }
+
+    if (profile == null) {
+      try {
         final customRes = await _supabase
             .from('custom_friends')
-            .select('name')
+            .select('id, name, linked_user_id')
             .eq('id', friendId)
             .maybeSingle();
         if (customRes != null) {
           profile = {
+            'id': customRes['id'].toString(),
             'full_name': customRes['name'],
             'username': null,
             'avatar_url': null,
+            'is_custom': true,
+            'linked_user_id': customRes['linked_user_id']?.toString(),
           };
         }
+      } catch (e) {
+        LoggerService.warning('Error fetching custom friend for $friendId: $e');
       }
-    } catch (e) {
-      LoggerService.warning('Error fetching profile for $friendId: $e');
     }
 
-    // 2. Fetch shared expenses via RPC
-    final expensesRes = await _supabase.rpc(
-      'get_shared_expenses',
-      params: {
-        'p_current_user_id': userId,
-        'p_friend_id': friendId,
-      },
-    );
-
-    // 3. Fetch payments
-    final paymentsRes = await PaymentService().fetchPaymentsBetweenUsers(
-      userId,
-      friendId.toString(),
-    );
-
+    // 2. Fetch shared expenses via RPC (only if not an unlinked custom friend)
     final List<Map<String, dynamic>> expenses = [];
+    final List<Map<String, dynamic>> payments = [];
     double expensesYouOwe = 0.0;
     double expensesYouAreOwed = 0.0;
-
-    for (final e in expensesRes) {
-      final amount = (e['total_amount'] as num).toDouble();
-      final yourShare = (e['your_share'] as num? ?? 0).toDouble();
-      final friendShare = (e['friend_share'] as num?)?.toDouble() ??
-          (amount > yourShare ? amount - yourShare : 0.0);
-      final youPaid = (e['you_paid'] as num? ?? 0).toDouble();
-      final friendPaid = (e['friend_paid'] as num? ?? 0).toDouble();
-
-      if (youPaid > 0 && friendShare > 0) {
-        final coverage = amount > 0 ? (youPaid / amount).clamp(0.0, 1.0) : 1.0;
-        expensesYouAreOwed += friendShare * coverage;
-      }
-      if (friendPaid > 0 && yourShare > 0) {
-        final coverage = amount > 0 ? (friendPaid / amount).clamp(0.0, 1.0) : 1.0;
-        expensesYouOwe += yourShare * coverage;
-      }
-
-      expenses.add({
-        'id': e['id'] as int,
-        'description': e['description'],
-        'amount': amount,
-        'date': DateTime.parse(e['date'] as String),
-        'creator_name': e['creator_name'],
-        'your_share': yourShare,
-        'you_paid': youPaid,
-        'friend_paid': friendPaid,
-      });
-    }
-
-    final List<Map<String, dynamic>> payments = [];
     double paidToFriend = 0.0;
     double receivedFromFriend = 0.0;
-    for (final p in paymentsRes) {
-      final pAmt = (p['amount'] as num).toDouble();
-      if (p['from_user_id'] == userId) {
-        paidToFriend += pAmt;
-      } else {
-        receivedFromFriend += pAmt;
+
+    final isCustomUnlinked =
+        profile?['is_custom'] == true && profile?['linked_user_id'] == null;
+
+    if (!isCustomUnlinked) {
+      final targetUserId = profile?['linked_user_id'] ?? friendId;
+      try {
+        final expensesRes = await _supabase.rpc(
+          'get_shared_expenses',
+          params: {
+            'p_current_user_id': userId,
+            'p_friend_id': targetUserId,
+          },
+        );
+
+        if (expensesRes is List) {
+          for (final e in expensesRes) {
+            final amount = (e['total_amount'] as num).toDouble();
+            final yourShare = (e['your_share'] as num? ?? 0).toDouble();
+            final friendShare = (e['friend_share'] as num?)?.toDouble() ??
+                (amount > yourShare ? amount - yourShare : 0.0);
+            final youPaid = (e['you_paid'] as num? ?? 0).toDouble();
+            final friendPaid = (e['friend_paid'] as num? ?? 0).toDouble();
+
+            if (youPaid > 0 && friendShare > 0) {
+              final coverage =
+                  amount > 0 ? (youPaid / amount).clamp(0.0, 1.0) : 1.0;
+              expensesYouAreOwed += friendShare * coverage;
+            }
+            if (friendPaid > 0 && yourShare > 0) {
+              final coverage =
+                  amount > 0 ? (friendPaid / amount).clamp(0.0, 1.0) : 1.0;
+              expensesYouOwe += yourShare * coverage;
+            }
+
+            expenses.add({
+              'id': e['id'] as int,
+              'description': e['description'],
+              'amount': amount,
+              'date': DateTime.parse(e['date'] as String),
+              'creator_name': e['creator_name'],
+              'your_share': yourShare,
+              'you_paid': youPaid,
+              'friend_paid': friendPaid,
+            });
+          }
+        }
+      } catch (e) {
+        LoggerService.warning('Error fetching shared expenses via rpc: $e');
       }
-      payments.add(Map<String, dynamic>.from(p));
+
+      // 3. Fetch payments
+      try {
+        final paymentsRes = await PaymentService().fetchPaymentsBetweenUsers(
+          userId,
+          targetUserId.toString(),
+        );
+        for (final p in paymentsRes) {
+          final pAmt = (p['amount'] as num).toDouble();
+          if (p['from_user_id'] == userId) {
+            paidToFriend += pAmt;
+          } else {
+            receivedFromFriend += pAmt;
+          }
+          payments.add(Map<String, dynamic>.from(p));
+        }
+      } catch (e) {
+        LoggerService.warning('Error fetching payments between users: $e');
+      }
+    }
+
+    if (expenses.isEmpty) {
+      final customExpenses =
+          await CustomFriendBalanceService.getExpenses(friendIdStr);
+      final customBal =
+          await CustomFriendBalanceService.getBalance(friendIdStr);
+      expensesYouAreOwed += customBal['youAreOwed'] ?? 0.0;
+      expensesYouOwe += customBal['youOwe'] ?? 0.0;
+
+      for (final ce in customExpenses) {
+        expenses.add({
+          'id': ce['expense_id'] ?? 0,
+          'description': ce['description'] ?? 'Expense',
+          'amount': (ce['total_amount'] as num?)?.toDouble() ?? 0.0,
+          'date': ce['date'] != null
+              ? DateTime.tryParse(ce['date'] as String) ?? DateTime.now()
+              : DateTime.now(),
+          'creator_name': ce['paid_by_you'] == true
+              ? 'You'
+              : (profile?['full_name'] ?? 'Friend'),
+          'your_share': (ce['your_share'] as num?)?.toDouble() ?? 0.0,
+          'you_paid': ce['paid_by_you'] == true
+              ? (ce['total_amount'] as num?)?.toDouble() ?? 0.0
+              : 0.0,
+          'friend_paid': ce['paid_by_you'] != true
+              ? (ce['total_amount'] as num?)?.toDouble() ?? 0.0
+              : 0.0,
+        });
+      }
     }
 
     final net = (expensesYouAreOwed - expensesYouOwe) + (paidToFriend - receivedFromFriend);

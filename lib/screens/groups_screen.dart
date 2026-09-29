@@ -5,6 +5,7 @@ import '../providers/friend_provider.dart'; // <-- Import
 import '../providers/group_provider.dart'; // <-- Import
 import '../widgets/friend_selection_widget.dart';
 import '../widgets/loading_spinner.dart';
+import '../widgets/add_friend_dialog.dart';
 import 'friend_details_screen.dart';
 import 'group_details_screen.dart';
 
@@ -343,54 +344,33 @@ class _GroupsScreenState extends State<GroupsScreen>
                                   ),
                               ],
                             ),
-                            subtitle: isCustom && !isLinked
-                                ? Row(
-                                    children: [
-                                      Icon(Icons.link,
-                                          size: 13,
-                                          color: Theme.of(context)
-                                              .colorScheme
-                                              .primary),
-                                      const SizedBox(width: 4),
-                                      Text(
-                                        'Tap to connect account',
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          color: Theme.of(context)
-                                              .colorScheme
-                                              .primary,
-                                        ),
-                                      ),
-                                    ],
+                            subtitle: (netBalance > 0
+                                ? Text(
+                                    'You get ${currencyProvider.format(netBalance)}',
+                                    style: const TextStyle(
+                                        color: Colors.green),
                                   )
-                                : (netBalance > 0
+                                : netBalance < 0
                                     ? Text(
-                                        'You get ${currencyProvider.format(netBalance)}',
+                                        'You owe ${currencyProvider.format(netBalance.abs())}',
                                         style: const TextStyle(
-                                            color: Colors.green),
+                                            color: Colors.red),
                                       )
-                                    : netBalance < 0
-                                        ? Text(
-                                            'You owe ${currencyProvider.format(netBalance.abs())}',
-                                            style: const TextStyle(
-                                                color: Colors.red),
-                                          )
-                                        : const Text('Settled up')),
+                                    : const Text('Settled up')),
                             onTap: () {
-                              if (isCustom && !isLinked) {
-                                _showLinkFriendDialog(
-                                    friendProvider, friendId, displayName);
-                              } else {
-                                final targetId =
-                                    item['linked_user_id'] ?? friendId;
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (context) =>
-                                        FriendDetailsScreen(friendId: targetId),
-                                  ),
-                                );
-                              }
+                              final targetId =
+                                  item['linked_user_id'] ?? friendId;
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) =>
+                                      FriendDetailsScreen(friendId: targetId),
+                                ),
+                              ).then((_) {
+                                if (mounted) {
+                                  friendProvider.fetchFriendsAndRequests();
+                                }
+                              });
                             },
                           ),
                         );
@@ -500,233 +480,7 @@ class _GroupsScreenState extends State<GroupsScreen>
   }
 
   void _showAddFriendDialog(FriendProvider friendProvider) {
-    _addFriendController.clear();
-    bool isNameOnly = false;
-    bool isSubmitting = false;
-    String? errorMessage;
-
-    showDialog(
-      context: context,
-      barrierDismissible: !isSubmitting,
-      builder: (dialogCtx) => StatefulBuilder(
-        builder: (dCtx, setDialogState) {
-          return AlertDialog(
-            title: const Text('Add Friend'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                SegmentedButton<bool>(
-                  segments: const [
-                    ButtonSegment(
-                      value: false,
-                      label: Text('Shaire User'),
-                      icon: Icon(Icons.person_search),
-                    ),
-                    ButtonSegment(
-                      value: true,
-                      label: Text('Name Only'),
-                      icon: Icon(Icons.badge_outlined),
-                    ),
-                  ],
-                  selected: {isNameOnly},
-                  onSelectionChanged: isSubmitting
-                      ? null
-                      : (newSelection) {
-                          setDialogState(() {
-                            isNameOnly = newSelection.first;
-                            _addFriendController.clear();
-                            errorMessage = null;
-                          });
-                        },
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: _addFriendController,
-                  autofocus: true,
-                  enabled: !isSubmitting,
-                  onChanged: (_) {
-                    if (errorMessage != null) {
-                      setDialogState(() => errorMessage = null);
-                    }
-                  },
-                  decoration: InputDecoration(
-                    labelText:
-                        isNameOnly ? "Friend's Name" : "Username or Email",
-                    hintText: isNameOnly
-                        ? "e.g. Alex"
-                        : "e.g. alex or alex@gmail.com",
-                    helperText: isNameOnly
-                        ? "Quickly add now, link to account later"
-                        : null,
-                    errorText: errorMessage,
-                    border: const OutlineInputBorder(),
-                  ),
-                ),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: isSubmitting ? null : () => Navigator.pop(dialogCtx),
-                child: const Text('CANCEL'),
-              ),
-              ElevatedButton(
-                onPressed: isSubmitting
-                    ? null
-                    : () async {
-                        final input = _addFriendController.text.trim();
-                        if (input.isEmpty) {
-                          setDialogState(() {
-                            errorMessage = isNameOnly
-                                ? 'Please enter a name'
-                                : 'Please enter a username or email';
-                          });
-                          return;
-                        }
-
-                        setDialogState(() {
-                          isSubmitting = true;
-                          errorMessage = null;
-                        });
-
-                        try {
-                          if (isNameOnly) {
-                            await friendProvider.addCustomFriend(input);
-                            if (dialogCtx.mounted) Navigator.pop(dialogCtx);
-                            if (mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text('Friend "$input" added!')),
-                              );
-                            }
-                          } else {
-                            await friendProvider.sendFriendRequest(input);
-                            if (dialogCtx.mounted) Navigator.pop(dialogCtx);
-                            if (mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                    content: Text('Friend request sent!')),
-                              );
-                            }
-                          }
-                        } catch (e) {
-                          setDialogState(() {
-                            isSubmitting = false;
-                            errorMessage = e
-                                .toString()
-                                .replaceFirst(RegExp(r'^Exception:\s*'), '');
-                          });
-                        }
-                      },
-                child: isSubmitting
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : Text(isNameOnly ? 'ADD FRIEND' : 'SEND REQUEST'),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-
-  void _showLinkFriendDialog(FriendProvider friendProvider,
-      String customFriendId, String friendName) {
-    final linkController = TextEditingController();
-    bool isSubmitting = false;
-    String? errorMessage;
-
-    showDialog(
-      context: context,
-      barrierDismissible: !isSubmitting,
-      builder: (dialogCtx) => StatefulBuilder(
-        builder: (dCtx, setDialogState) {
-          return AlertDialog(
-            title: Text('Connect $friendName'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Link $friendName to their Shaire account to sync shared expenses and balances.',
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: linkController,
-                  autofocus: true,
-                  enabled: !isSubmitting,
-                  onChanged: (_) {
-                    if (errorMessage != null) {
-                      setDialogState(() => errorMessage = null);
-                    }
-                  },
-                  decoration: InputDecoration(
-                    labelText: "Username or Email",
-                    hintText: "e.g. alex or alex@gmail.com",
-                    errorText: errorMessage,
-                    border: const OutlineInputBorder(),
-                    prefixIcon: const Icon(Icons.person_search),
-                  ),
-                ),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: isSubmitting ? null : () => Navigator.pop(dialogCtx),
-                child: const Text('CANCEL'),
-              ),
-              ElevatedButton(
-                onPressed: isSubmitting
-                    ? null
-                    : () async {
-                        final input = linkController.text.trim();
-                        if (input.isEmpty) {
-                          setDialogState(() {
-                            errorMessage = 'Please enter a username or email';
-                          });
-                          return;
-                        }
-
-                        setDialogState(() {
-                          isSubmitting = true;
-                          errorMessage = null;
-                        });
-
-                        try {
-                          await friendProvider.linkCustomFriend(
-                              customFriendId, input);
-                          if (dialogCtx.mounted) Navigator.pop(dialogCtx);
-                          if (mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                  content: Text('$friendName connected to $input!')),
-                            );
-                          }
-                        } catch (e) {
-                          setDialogState(() {
-                            isSubmitting = false;
-                            errorMessage = e
-                                .toString()
-                                .replaceFirst(RegExp(r'^Exception:\s*'), '');
-                          });
-                        }
-                      },
-                child: isSubmitting
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('CONNECT'),
-              ),
-            ],
-          );
-        },
-      ),
-    );
+    AddFriendDialog.show(context, defaultNameOnly: false);
   }
 
   void _showJoinGroupDialog(GroupProvider groupProvider) {
@@ -746,7 +500,6 @@ class _GroupsScreenState extends State<GroupsScreen>
               decoration: InputDecoration(
                 labelText: 'Invite Code',
                 errorText: errorMessage,
-                border: const OutlineInputBorder(),
               ),
               autofocus: true,
               enabled: !isSubmitting,

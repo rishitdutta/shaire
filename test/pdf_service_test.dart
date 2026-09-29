@@ -91,4 +91,38 @@ void main() {
     expect(bytes, isNotNull);
     expect(bytes.length, greaterThan(100));
   });
+
+  test('PdfService correctly accepts custom payerName and sanitizes participants', () async {
+    final entries = [
+      BillEntry(
+        description: 'Tacos',
+        amount: 200.0,
+        assignedTo: ['You', 'Bob'],
+        type: BillEntryType.item,
+      ),
+    ];
+
+    final participants = [
+      {'name': 'Rishi', 'share': 100.0, 'paid': 0.0},
+      {'name': 'Bob', 'share': 100.0, 'paid': 200.0},
+    ];
+
+    final pdfBytes = await PdfService.generateSplitBillPdf(
+      title: 'Lunch at Taqueria',
+      merchantName: 'Taqueria',
+      date: DateTime.now(),
+      totalAmount: 200.0,
+      currencySymbol: '₹',
+      splitType: 'equal',
+      billEntries: entries,
+      participantShares: participants,
+      payerName: 'Bob',
+    );
+
+    expect(pdfBytes, isNotNull);
+    expect(pdfBytes.length, greaterThan(100));
+    final header = String.fromCharCodes(pdfBytes.take(5));
+    expect(header, equals('%PDF-'));
+  });
 }
+

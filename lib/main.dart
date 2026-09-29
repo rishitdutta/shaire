@@ -316,7 +316,10 @@ class _MainScreenState extends State<MainScreen> {
                 ),
               ],
             ),
-      body: _screens[_selectedIndex == 2 ? 0 : _selectedIndex],
+      body: IndexedStack(
+        index: _selectedIndex == 2 ? 0 : _selectedIndex,
+        children: _screens,
+      ),
       floatingActionButton: FloatingActionButton(
         onPressed: () => _onItemTapped(2),
         tooltip: 'Add Expense',

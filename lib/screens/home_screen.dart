@@ -7,6 +7,10 @@ import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/logger_service.dart';
 import '../widgets/loading_spinner.dart';
+import '../services/expense_draft_service.dart';
+import '../database/expense.dart';
+import 'add_expense_screen.dart';
+import 'expense_details_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -24,6 +28,7 @@ class _HomeScreenState extends State<HomeScreen>
   double _youGet = 0;
   double _youOwe = 0;
   final Set<String> _hiddenActivityIds = {};
+  ExpenseDraft? _activeDraft;
 
   @override
   void initState() {
@@ -47,14 +52,27 @@ class _HomeScreenState extends State<HomeScreen>
     await prefs.setStringList('hiddenActivityIds', _hiddenActivityIds.toList());
   }
 
+  Future<void> _checkDraft() async {
+    final draft = await ExpenseDraftService.getDraft();
+    if (mounted) {
+      setState(() {
+        _activeDraft = draft;
+      });
+    }
+  }
+
   Future<void> _fetchData() async {
     setState(() => _isLoading = true);
 
     try {
       final expenseProvider =
           Provider.of<ExpenseProvider>(context, listen: false);
-      final balances = await expenseProvider.fetchUserOverallBalances();
-      await expenseProvider.fetchExpenses();
+      final balancesFuture = expenseProvider.fetchUserOverallBalances();
+      final expensesFuture = expenseProvider.fetchExpenses();
+      final draftFuture = _checkDraft();
+
+      final results = await Future.wait([balancesFuture, expensesFuture, draftFuture]);
+      final balances = results[0] as Map<String, double>;
 
       if (!mounted) return;
       setState(() {
@@ -165,8 +183,125 @@ class _HomeScreenState extends State<HomeScreen>
             ),
           ),
           const SizedBox(height: 8),
+          if (_activeDraft != null) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16.0),
+              child: _buildDraftBanner(context),
+            ),
+            const SizedBox(height: 8),
+          ],
           Expanded(
             child: _buildActivityList(context),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDraftBanner(BuildContext context) {
+    final currencyProvider =
+        Provider.of<CurrencyProvider>(context, listen: false);
+    final draft = _activeDraft!;
+    final desc = draft.description.trim().isNotEmpty
+        ? draft.description.trim()
+        : 'Untitled Expense';
+    final amountText = (draft.totalAmount != null && draft.totalAmount! > 0)
+        ? currencyProvider.format(draft.totalAmount!)
+        : 'Draft in progress';
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.amber.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.amber.shade600, width: 1.5),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.amber.shade700,
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: const Text(
+              'DRAFT',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 11,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  desc,
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  amountText,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          TextButton.icon(
+            icon: const Icon(Icons.play_arrow, size: 18),
+            label: const Text('Resume'),
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.amber.shade900,
+              backgroundColor: Colors.amber.shade100,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            ),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) =>
+                      const AddExpenseScreen(resumeDraft: true),
+                ),
+              ).then((_) => _checkDraft());
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.close, size: 18, color: Colors.grey),
+            tooltip: 'Discard Draft',
+            onPressed: () async {
+              final confirm = await showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('Discard Draft?'),
+                  content: const Text(
+                    'Are you sure you want to discard this unfinished expense?',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('Cancel'),
+                    ),
+                    TextButton(
+                      style: TextButton.styleFrom(foregroundColor: Colors.red),
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('Discard'),
+                    ),
+                  ],
+                ),
+              );
+              if (confirm == true) {
+                await ExpenseDraftService.clearDraft();
+                _checkDraft();
+              }
+            },
           ),
         ],
       ),
@@ -222,6 +357,7 @@ class _HomeScreenState extends State<HomeScreen>
 
   Widget _buildActivityItem(
     BuildContext context,
+    Expense expense,
     String id,
     String title,
     String action,
@@ -233,43 +369,54 @@ class _HomeScreenState extends State<HomeScreen>
 
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
-      child: Padding(
-        padding: const EdgeInsets.all(12.0),
-        child: Row(
-          children: [
-            CircleAvatar(
-              radius: 20,
-              backgroundColor: Theme.of(context).colorScheme.primaryContainer,
-              child: Icon(icon, color: Theme.of(context).colorScheme.primary),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => ExpenseDetailsScreen(expense: expense),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  Text(
-                    action,
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ],
+          );
+        },
+        child: Padding(
+          padding: const EdgeInsets.all(12.0),
+          child: Row(
+            children: [
+              CircleAvatar(
+                radius: 20,
+                backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+                child: Icon(icon, color: Theme.of(context).colorScheme.primary),
               ),
-            ),
-            Text(
-              currencyProvider.format(amount),
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
-            IconButton(
-              icon: const Icon(Icons.close, color: Colors.redAccent),
-              tooltip: 'Remove from Recent Activity',
-              onPressed: onRemove,
-            ),
-          ],
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    Text(
+                      action,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
+              Text(
+                currencyProvider.format(amount),
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              IconButton(
+                icon: const Icon(Icons.close, color: Colors.redAccent),
+                tooltip: 'Remove from Recent Activity',
+                onPressed: onRemove,
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -294,6 +441,7 @@ class _HomeScreenState extends State<HomeScreen>
       }
       groupedActivities[dateKey]!.add({
         'id': expenseId,
+        'expense': expense,
         'title': expense.description,
         'action': isMyExpense ? 'You paid' : 'Someone paid',
         'amount': expense.totalAmount,
@@ -388,6 +536,7 @@ class _HomeScreenState extends State<HomeScreen>
                 },
                 child: _buildActivityItem(
                   context,
+                  item['expense'] as Expense,
                   item['id'],
                   item['title'],
                   item['action'],

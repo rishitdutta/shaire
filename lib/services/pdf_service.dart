@@ -19,8 +19,56 @@ class PdfService {
     required List<BillEntry> billEntries,
     required List<Map<String, dynamic>> participantShares,
     Uint8List? receiptImageBytes,
+    String? payerName,
   }) async {
     final pdf = pw.Document();
+
+    // Determine effective payer name (and ensure it never says literal 'You')
+    String? effectivePayerName = payerName?.trim();
+    if (effectivePayerName != null && effectivePayerName.toLowerCase() == 'you') {
+      effectivePayerName = null;
+    }
+
+    if (effectivePayerName == null || effectivePayerName.isEmpty) {
+      for (final p in participantShares) {
+        final paid = (p['paid'] as num?)?.toDouble() ?? 0.0;
+        if (paid > 0.01) {
+          final pName = p['name']?.toString().trim();
+          if (pName != null && pName.toLowerCase() != 'you') {
+            effectivePayerName = pName;
+            break;
+          }
+        }
+      }
+    }
+
+    // Sanitize participant shares: replace any literal "You" or "you"
+    final sanitizedShares = participantShares.map((p) {
+      String name = p['name']?.toString() ?? 'Participant';
+      if (name.toLowerCase() == 'you') {
+        name = effectivePayerName ?? 'User';
+      }
+      return {
+        ...p,
+        'name': name,
+      };
+    }).toList();
+
+    // Sanitize bill entries assignedTo: replace any literal "You" or "you"
+    final sanitizedEntries = billEntries.map((e) {
+      final updatedAssigned = e.assignedTo.map((a) {
+        if (a.toLowerCase() == 'you') {
+          return effectivePayerName ?? 'User';
+        }
+        return a;
+      }).toList();
+      return BillEntry(
+        description: e.description,
+        amount: e.amount,
+        type: e.type,
+        assignedTo: updatedAssigned,
+      );
+    }).toList();
 
     // Load logo-full-dark.svg (clean vector logo without drop shadows)
     String? logoSvg;
@@ -171,6 +219,17 @@ class PdfService {
                       'Split Mode: ${splitType.toUpperCase()}',
                       style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey700),
                     ),
+                    if (effectivePayerName != null && effectivePayerName.isNotEmpty) ...[
+                      pw.SizedBox(height: 2),
+                      pw.Text(
+                        'Paid by: $effectivePayerName',
+                        style: pw.TextStyle(
+                          fontSize: 10,
+                          fontWeight: pw.FontWeight.bold,
+                          color: PdfColors.teal900,
+                        ),
+                      ),
+                    ],
                   ],
                 ),
                 pw.Column(
@@ -226,7 +285,7 @@ class PdfService {
                       _buildTableCell('AMOUNT', isHeader: true, alignRight: true),
                     ],
                   ),
-                  ...billEntries.map((item) {
+                  ...sanitizedEntries.map((item) {
                     final assignedText = item.assignedTo.isEmpty
                         ? 'Unassigned'
                         : item.assignedTo.join(', ');
@@ -316,11 +375,12 @@ class PdfService {
                     _buildTableCell('NET STATUS', isHeader: true, alignRight: true),
                   ],
                 ),
-                ...participantShares.map((p) {
+                ...sanitizedShares.map((p) {
                   final name = p['name']?.toString() ?? 'Unknown';
                   final share = (p['share'] as num?)?.toDouble() ?? 0.0;
                   final paid = (p['paid'] as num?)?.toDouble() ?? 0.0;
                   final net = paid - share;
+                  final isPayer = paid > 0.01;
 
                   String netStatus;
                   PdfColor netColor;
@@ -336,15 +396,16 @@ class PdfService {
                   }
 
                   return pw.TableRow(
-                    decoration: const pw.BoxDecoration(
-                      border: pw.Border(
+                    decoration: pw.BoxDecoration(
+                      color: isPayer ? PdfColors.teal50 : null,
+                      border: const pw.Border(
                         bottom: pw.BorderSide(color: PdfColors.grey300, width: 0.5),
                       ),
                     ),
                     children: [
-                      _buildTableCell(name, isBold: name.toLowerCase() == 'you'),
+                      _buildTableCell(name, isBold: isPayer),
                       _buildTableCell('$displayCurrency${share.toStringAsFixed(2)}', alignRight: true),
-                      _buildTableCell('$displayCurrency${paid.toStringAsFixed(2)}', alignRight: true),
+                      _buildTableCell('$displayCurrency${paid.toStringAsFixed(2)}', alignRight: true, isBold: isPayer),
                       _buildTableCell(netStatus, alignRight: true, color: netColor, isBold: true),
                     ],
                   );
@@ -436,6 +497,7 @@ class PdfService {
     required List<BillEntry> billEntries,
     required List<Map<String, dynamic>> participantShares,
     Uint8List? receiptImageBytes,
+    String? payerName,
   }) async {
     final pdfBytes = await generateSplitBillPdf(
       title: title,
@@ -447,6 +509,7 @@ class PdfService {
       billEntries: billEntries,
       participantShares: participantShares,
       receiptImageBytes: receiptImageBytes,
+      payerName: payerName,
     );
 
     final safeName = (merchantName ?? title)

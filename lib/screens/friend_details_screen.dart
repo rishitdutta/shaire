@@ -5,9 +5,13 @@ import '../providers/currency_provider.dart';
 import '../providers/expense_provider.dart';
 import '../providers/friend_provider.dart';
 import '../database/balance.dart';
+import '../database/expense.dart';
 import '../database/payment.dart';
+import '../services/custom_friend_balance_service.dart';
 import '../widgets/loading_spinner.dart';
+import '../widgets/link_friend_dialog.dart';
 import 'add_expense_screen.dart';
+import 'expense_details_screen.dart';
 
 class FriendDetailsScreen extends StatefulWidget {
   final dynamic friendId;
@@ -88,6 +92,80 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
     }
   }
 
+  bool get _isCustomFriend =>
+      _friendProfile?['is_custom'] == true ||
+      _friendProfile?['username'] == null;
+  bool get _isLinked => _friendProfile?['linked_user_id'] != null;
+
+  Future<void> _linkAccount() async {
+    final friendProvider = Provider.of<FriendProvider>(context, listen: false);
+    final fid = widget.friendId.toString();
+    final fname = _friendProfile?['full_name'] ?? 'Friend';
+    final success = await LinkFriendDialog.show(
+      context,
+      friendProvider: friendProvider,
+      customFriendId: fid,
+      friendName: fname,
+    );
+    if (success == true && mounted) {
+      await _loadFriendDetails();
+    }
+  }
+
+  Future<void> _deleteFriend() async {
+    final fname = _friendProfile?['full_name'] ?? 'Friend';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Friend'),
+        content: Text(
+          'Are you sure you want to delete $fname? All shared balances and local history for this friend will be removed.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      setState(() => _loading = true);
+      try {
+        final friendProvider =
+            Provider.of<FriendProvider>(context, listen: false);
+        final fid = widget.friendId.toString();
+        await friendProvider.deleteCustomFriend(fid);
+        await CustomFriendBalanceService.clearFriendData(fid);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('$fname removed')),
+          );
+          Navigator.pop(context, true);
+        }
+      } catch (e) {
+        if (mounted) {
+          setState(() => _loading = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Failed to delete friend: $e'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    }
+  }
+
   void _navigateToAddExpense() {
     Navigator.push(
       context,
@@ -99,6 +177,34 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
         ),
       ),
     ).then((_) => _loadFriendDetails());
+  }
+
+  Future<void> _openExpenseDetails(Map<String, dynamic> exp) async {
+    final currencyProvider =
+        Provider.of<CurrencyProvider>(context, listen: false);
+    final expId = exp['id'];
+    Expense? fullExpense;
+    if (expId != null && expId is int && expId > 0) {
+      fullExpense = await _expenseProvider.fetchExpenseById(expId);
+    }
+    fullExpense ??= Expense(
+      id: (expId is int) ? expId : 0,
+      description: exp['description'] ?? 'Expense',
+      totalAmount: (exp['amount'] as num?)?.toDouble() ?? 0.0,
+      currency: currencyProvider.currencyCode,
+      date: exp['date'] is DateTime ? exp['date'] : DateTime.now(),
+      createdBy: '',
+      splitType: 'equal',
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
+    );
+    if (!mounted) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ExpenseDetailsScreen(expense: fullExpense!),
+      ),
+    );
   }
 
   Future<void> _settleUp() async {
@@ -114,6 +220,24 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
       setState(() => _loading = true);
       try {
         final currencyProvider = Provider.of<CurrencyProvider>(context, listen: false);
+
+        if (_isCustomFriend && !_isLinked) {
+          final delta = _netBalance > 0 ? -selectedAmount : selectedAmount;
+          await CustomFriendBalanceService.adjustBalance(
+            customFriendId: widget.friendId.toString(),
+            deltaAmount: delta,
+          );
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                  'Settlement of ${currencyProvider.format(selectedAmount)} recorded'),
+            ),
+          );
+          await _loadFriendDetails();
+          return;
+        }
+
         final currencyCode = currencyProvider.currencyCode;
         final fromId = _netBalance < 0 ? _currentUserId! : widget.friendId.toString();
         final toId = _netBalance < 0 ? widget.friendId.toString() : _currentUserId!;
@@ -195,6 +319,20 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
         titleTextStyle:
             theme.textTheme.titleLarge?.copyWith(color: onPrimaryColor),
         title: Text(friendName),
+        actions: [
+          if (_isCustomFriend && !_isLinked)
+            IconButton(
+              icon: const Icon(Icons.link),
+              tooltip: 'Link Account',
+              onPressed: _linkAccount,
+            ),
+          if (_isCustomFriend)
+            IconButton(
+              icon: const Icon(Icons.delete_outline),
+              tooltip: 'Delete Friend',
+              onPressed: _deleteFriend,
+            ),
+        ],
         bottom: TabBar(
           controller: _tabController,
           indicatorColor: onPrimaryColor,
@@ -272,12 +410,13 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
                         onRefresh: _loadFriendDetails,
                         child: ListView.builder(
                           itemCount: _expenses.length,
-                          itemBuilder: (ctx, i) {
+                          itemBuilder: (_, i) {
                             final exp = _expenses[i];
                             return Card(
                               margin: const EdgeInsets.symmetric(
                                   horizontal: 16, vertical: 4),
                               child: ListTile(
+                                onTap: () => _openExpenseDetails(exp),
                                 leading: CircleAvatar(
                                   backgroundColor:
                                       primaryColor.withValues(alpha: 0.1),
@@ -395,7 +534,8 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
                             shrinkWrap: true,
                             physics: const NeverScrollableScrollPhysics(),
                             itemCount: _payments.length,
-                            separatorBuilder: (_, __) => const Divider(height: 1),
+                            separatorBuilder: (_, __) =>
+                                Divider(height: 1, color: Theme.of(context).dividerColor),
                             itemBuilder: (ctx, idx) {
                               final p = _payments[idx];
                               final isPayer = p['from_user_id'] == _currentUserId;

@@ -14,6 +14,7 @@ class SplitOptionsWidget extends StatelessWidget {
   final Map<String, TextEditingController> individualPercentControllers;
   final ValueChanged<SplitType> onSplitTypeChanged;
   final VoidCallback onAmountsChanged;
+  final String payerId;
 
   const SplitOptionsWidget({
     super.key,
@@ -25,6 +26,7 @@ class SplitOptionsWidget extends StatelessWidget {
     required this.individualPercentControllers,
     required this.onSplitTypeChanged,
     required this.onAmountsChanged,
+    this.payerId = 'you',
   });
 
   @override
@@ -55,7 +57,7 @@ class SplitOptionsWidget extends StatelessWidget {
             Tab(text: 'Manual'),
             Tab(text: 'Percentage'),
           ],
-          dividerColor: Colors.grey.shade300,
+          dividerColor: Theme.of(context).dividerColor,
           onTap: (index) {
             onSplitTypeChanged(SplitType.values[index]);
           },
@@ -76,7 +78,7 @@ class SplitOptionsWidget extends StatelessWidget {
           ),
         ),
 
-        Divider(height: 32, color: Colors.grey.shade300),
+        Divider(height: 32, color: Theme.of(context).dividerColor),
       ],
     );
   }
@@ -89,12 +91,14 @@ class SplitOptionsWidget extends StatelessWidget {
     final currencyProvider =
         Provider.of<CurrencyProvider>(context, listen: false);
 
+    final bool isYouPayer = payerId == 'you';
+
     return ListView(
       children: [
         // Current user (you)
         ListTile(
           leading: const CircleAvatar(child: Icon(Icons.person)),
-          title: const Text('You (paid)'),
+          title: Text(isYouPayer ? 'You (paid)' : 'You'),
           trailing: Text(
             currencyProvider.format(perPersonAmount),
             style: Theme.of(context).textTheme.titleMedium,
@@ -102,17 +106,21 @@ class SplitOptionsWidget extends StatelessWidget {
         ),
 
         // Selected contacts
-        ...selectedContacts.map((contact) => ListTile(
-              leading: CircleAvatar(
-                child: Icon(
-                    contact['isGroup'] == true ? Icons.group : Icons.person),
-              ),
-              title: Text(contact['name'] ?? ''),
-              trailing: Text(
-                currencyProvider.format(perPersonAmount),
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-            )),
+        ...selectedContacts.map((contact) {
+          final isPayer = contact['id'].toString() == payerId;
+          final name = contact['name'] ?? '';
+          return ListTile(
+            leading: CircleAvatar(
+              child: Icon(
+                  contact['isGroup'] == true ? Icons.group : Icons.person),
+            ),
+            title: Text(isPayer ? '$name (paid)' : name),
+            trailing: Text(
+              currencyProvider.format(perPersonAmount),
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+          );
+        }),
       ],
     );
   }
@@ -127,6 +135,8 @@ class SplitOptionsWidget extends StatelessWidget {
       text: (totalAmount / (selectedContacts.length + 1)).toStringAsFixed(2),
     );
 
+    final bool isYouPayer = payerId == 'you';
+
     return ListView(
       children: [
         // Current user (you)
@@ -136,16 +146,16 @@ class SplitOptionsWidget extends StatelessWidget {
             children: [
               const CircleAvatar(child: Icon(Icons.person)),
               const SizedBox(width: 16),
-              const Expanded(child: Text('You (paid)')),
+              Expanded(child: Text(isYouPayer ? 'You (paid)' : 'You')),
               SizedBox(
                 width: 120,
                 child: TextField(
                   controller: individualAmountControllers['you'],
                   decoration: InputDecoration(
-                    border: const OutlineInputBorder(),
                     prefixText: currencyProvider.currencySymbol,
+                    isDense: true,
                     contentPadding:
-                        const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                        const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
                   ),
                   keyboardType:
                       const TextInputType.numberWithOptions(decimal: true),
@@ -162,6 +172,8 @@ class SplitOptionsWidget extends StatelessWidget {
         // Selected contacts
         ...selectedContacts.map((contact) {
           final id = contact['id'].toString();
+          final isPayer = id == payerId;
+          final name = contact['name'] ?? '';
 
           individualAmountControllers[id] ??= TextEditingController(
             text:
@@ -177,16 +189,16 @@ class SplitOptionsWidget extends StatelessWidget {
                       contact['isGroup'] == true ? Icons.group : Icons.person),
                 ),
                 const SizedBox(width: 16),
-                Expanded(child: Text(contact['name'] ?? '')),
+                Expanded(child: Text(isPayer ? '$name (paid)' : name)),
                 SizedBox(
                   width: 120,
                   child: TextField(
                     controller: individualAmountControllers[id],
                     decoration: InputDecoration(
-                      border: const OutlineInputBorder(),
                       prefixText: currencyProvider.currencySymbol,
+                      isDense: true,
                       contentPadding: const EdgeInsets.symmetric(
-                          vertical: 8, horizontal: 12),
+                          vertical: 10, horizontal: 12),
                     ),
                     keyboardType:
                         const TextInputType.numberWithOptions(decimal: true),
@@ -217,6 +229,8 @@ class SplitOptionsWidget extends StatelessWidget {
       text: ((defaultPercentage / 100) * totalAmount).toStringAsFixed(2),
     );
 
+    final bool isYouPayer = payerId == 'you';
+
     return ListView(
       children: [
         // Current user (you)
@@ -226,7 +240,7 @@ class SplitOptionsWidget extends StatelessWidget {
             children: [
               const CircleAvatar(child: Icon(Icons.person)),
               const SizedBox(width: 16),
-              const Expanded(child: Text('You (paid)')),
+              Expanded(child: Text(isYouPayer ? 'You (paid)' : 'You')),
               Row(
                 children: [
                   SizedBox(
@@ -234,10 +248,10 @@ class SplitOptionsWidget extends StatelessWidget {
                     child: TextField(
                       controller: individualPercentControllers['you'],
                       decoration: const InputDecoration(
-                        border: OutlineInputBorder(),
                         suffixText: '%',
+                        isDense: true,
                         contentPadding:
-                            EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                            EdgeInsets.symmetric(vertical: 10, horizontal: 12),
                       ),
                       keyboardType:
                           const TextInputType.numberWithOptions(decimal: true),
@@ -263,6 +277,8 @@ class SplitOptionsWidget extends StatelessWidget {
         // Selected contacts
         ...selectedContacts.map((contact) {
           final id = contact['id'].toString();
+          final isPayer = id == payerId;
+          final name = contact['name'] ?? '';
 
           individualPercentControllers[id] ??=
               TextEditingController(text: defaultPercentage.toStringAsFixed(0));
@@ -281,7 +297,7 @@ class SplitOptionsWidget extends StatelessWidget {
                       contact['isGroup'] == true ? Icons.group : Icons.person),
                 ),
                 const SizedBox(width: 16),
-                Expanded(child: Text(contact['name'] ?? '')),
+                Expanded(child: Text(isPayer ? '$name (paid)' : name)),
                 Row(
                   children: [
                     SizedBox(
@@ -289,10 +305,10 @@ class SplitOptionsWidget extends StatelessWidget {
                       child: TextField(
                         controller: individualPercentControllers[id],
                         decoration: const InputDecoration(
-                          border: OutlineInputBorder(),
                           suffixText: '%',
+                          isDense: true,
                           contentPadding:
-                              EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                              EdgeInsets.symmetric(vertical: 10, horizontal: 12),
                         ),
                         keyboardType: const TextInputType.numberWithOptions(
                             decimal: true),

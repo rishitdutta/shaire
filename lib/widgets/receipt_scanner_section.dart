@@ -115,16 +115,6 @@ class ReceiptScannerSection extends StatelessWidget {
                 ),
                 onPressed: onBatchAssign,
               ),
-            if (onDownloadPdf != null)
-              OutlinedButton.icon(
-                icon: const Icon(Icons.picture_as_pdf_outlined, size: 16),
-                label: const Text('Download PDF'),
-                style: OutlinedButton.styleFrom(
-                  visualDensity: VisualDensity.compact,
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                ),
-                onPressed: onDownloadPdf,
-              ),
           ],
         ),
         const SizedBox(height: 12),
@@ -222,7 +212,7 @@ class ReceiptScannerSection extends StatelessWidget {
           },
         ),
 
-        const Divider(height: 32),
+        Divider(height: 32, color: Theme.of(context).dividerColor),
       ],
     );
   }
@@ -486,7 +476,7 @@ class _AddCustomChargeDialogState extends State<AddCustomChargeDialog> {
               ),
 
               if (!_splitWithEveryone) ...[
-                const Divider(),
+                Divider(color: Theme.of(context).dividerColor),
                 ...widget.allNames.map((name) {
                   return CheckboxListTile(
                     title: Text(name, style: const TextStyle(fontSize: 13)),

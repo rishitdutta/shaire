@@ -9,6 +9,9 @@ import '../database/expense.dart';
 import '../providers/expense_provider.dart';
 import 'package:intl/intl.dart';
 import 'package:shaire/services/logger_service.dart';
+import '../services/expense_draft_service.dart';
+import 'add_expense_screen.dart';
+import 'expense_details_screen.dart';
 
 class ExpensesScreen extends StatefulWidget {
   const ExpensesScreen({super.key});
@@ -29,21 +32,34 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   String _lowestCategory = 'Unknown';
   List<Expense> _cachedRecentExpenses = [];
   List<Expense>? _lastProcessedExpenses;
+  ExpenseDraft? _activeDraft;
 
   @override
   void initState() {
     super.initState();
 
-    // Load cached data first, then fetch if needed
+    // Load cached data and drafts first, then fetch if needed
     _loadDataAndFetch();
+  }
+
+  Future<void> _checkDraft() async {
+    final draft = await ExpenseDraftService.getDraft();
+    if (mounted) {
+      setState(() {
+        _activeDraft = draft;
+      });
+    }
   }
 
   Future<void> _loadDataAndFetch() async {
     final predictionProvider =
         Provider.of<PredictionProvider>(context, listen: false);
 
-    // First load cached predictions
-    await predictionProvider.loadCachedPredictions();
+    // First load cached predictions & draft
+    await Future.wait([
+      predictionProvider.loadCachedPredictions(),
+      _checkDraft(),
+    ]);
 
     // Then fetch fresh expenses & predictions if needed
     await _fetchExpenses();
@@ -59,13 +75,14 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
           Provider.of<PredictionProvider>(context, listen: false);
       await expenseProvider.fetchExpenses();
 
-      if (predictionProvider.needsRefresh) {
-        await predictionProvider.fetchPredictions(expenseProvider.expenses);
-      }
-
       if (!mounted) return;
       _processExpensesData(expenseProvider.expenses);
       setState(() => _isLoading = false);
+
+      // Fetch predictions in the background without blocking the expenses UI
+      if (predictionProvider.needsRefresh) {
+        predictionProvider.fetchPredictions(expenseProvider.expenses);
+      }
     } catch (e) {
       LoggerService.error(
           'Error fetching expenses or processing predictions', e);
@@ -558,7 +575,11 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
               ],
             ),
             const SizedBox(height: 8),
-            _cachedRecentExpenses.isEmpty
+            if (_activeDraft != null) ...[
+              _buildDraftItem(context, currencyProvider),
+              const SizedBox(height: 12),
+            ],
+            _cachedRecentExpenses.isEmpty && _activeDraft == null
                 ? const Center(
                     child: Padding(
                       padding: EdgeInsets.all(16.0),
@@ -570,6 +591,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                       return _buildExpenseItem(
                         context,
                         currencyProvider,
+                        expense,
                         expense.description,
                         _formatExpenseDate(expense.date),
                         expense.totalAmount,
@@ -580,6 +602,115 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                   ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildDraftItem(
+      BuildContext context, CurrencyProvider currencyProvider) {
+    final draft = _activeDraft!;
+    final desc = draft.description.trim().isNotEmpty
+        ? draft.description.trim()
+        : 'Untitled Expense';
+    final amountText = (draft.totalAmount != null && draft.totalAmount! > 0)
+        ? currencyProvider.format(draft.totalAmount!)
+        : 'Draft in progress';
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.amber.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.amber.shade600, width: 1.5),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.amber.shade700,
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: const Text(
+              'DRAFT',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 11,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  desc,
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  amountText,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          TextButton.icon(
+            icon: const Icon(Icons.play_arrow, size: 18),
+            label: const Text('Resume'),
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.amber.shade900,
+              backgroundColor: Colors.amber.shade100,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            ),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) =>
+                      const AddExpenseScreen(resumeDraft: true),
+                ),
+              ).then((_) => _checkDraft());
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.close, size: 18, color: Colors.grey),
+            tooltip: 'Discard Draft',
+            onPressed: () async {
+              final confirm = await showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('Discard Draft?'),
+                  content: const Text(
+                    'Are you sure you want to discard this unfinished expense?',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('Cancel'),
+                    ),
+                    TextButton(
+                      style: TextButton.styleFrom(foregroundColor: Colors.red),
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('Discard'),
+                    ),
+                  ],
+                ),
+              );
+              if (confirm == true) {
+                await ExpenseDraftService.clearDraft();
+                _checkDraft();
+              }
+            },
+          ),
+        ],
       ),
     );
   }
@@ -619,14 +750,14 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
               '$_highestCategory is your highest expense category this month.',
               'Consider setting a budget for this category.',
             ),
-            const Divider(),
+            Divider(color: Theme.of(context).dividerColor),
             _buildInsightTile(
               context,
               Icons.trending_down,
               'You\'ve spent least on $_lowestCategory recently.',
               'Great work on controlling these expenses!',
             ),
-            if (hasNoExpenses) const Divider(),
+            if (hasNoExpenses) Divider(color: Theme.of(context).dividerColor),
             if (hasNoExpenses)
               _buildInsightTile(
                 context,
@@ -766,51 +897,63 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   Widget _buildExpenseItem(
       BuildContext context,
       CurrencyProvider currencyProvider,
+      Expense expense,
       String description,
       String date,
       double amount,
       String category,
       IconData icon) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8.0),
-      child: Row(
-        children: [
-          Container(
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            padding: const EdgeInsets.all(8),
-            child: Icon(
-              icon,
-              size: 24,
-              color: Theme.of(context).colorScheme.primary,
-            ),
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ExpenseDetailsScreen(expense: expense),
           ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  description,
-                  style: const TextStyle(fontWeight: FontWeight.w500),
-                ),
-                Text(
-                  '$date · $category',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ],
+        );
+      },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 4.0),
+        child: Row(
+          children: [
+            Container(
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              padding: const EdgeInsets.all(8),
+              child: Icon(
+                icon,
+                size: 24,
+                color: Theme.of(context).colorScheme.primary,
+              ),
             ),
-          ),
-          Text(
-            currencyProvider.format(amount),
-            style: TextStyle(
-              fontWeight: FontWeight.bold,
-              color: Theme.of(context).colorScheme.error,
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    description,
+                    style: const TextStyle(fontWeight: FontWeight.w500),
+                  ),
+                  Text(
+                    '$date · $category',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+            Text(
+              currencyProvider.format(amount),
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color: Theme.of(context).colorScheme.error,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

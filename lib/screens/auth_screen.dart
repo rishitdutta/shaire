@@ -131,22 +131,16 @@ class _AuthScreenState extends State<AuthScreen> {
               if (_isSignUp)
                 TextField(
                   controller: _usernameController,
-                  decoration: InputDecoration(
+                  decoration: const InputDecoration(
                     labelText: 'Username',
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
                   ),
                 ),
               if (_isSignUp) const SizedBox(height: 16),
 
               TextField(
                 controller: _emailController,
-                decoration: InputDecoration(
+                decoration: const InputDecoration(
                   labelText: 'Email',
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
                 ),
                 keyboardType: TextInputType.emailAddress,
               ),
@@ -154,11 +148,8 @@ class _AuthScreenState extends State<AuthScreen> {
 
               TextField(
                 controller: _passwordController,
-                decoration: InputDecoration(
+                decoration: const InputDecoration(
                   labelText: 'Password',
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
                 ),
                 obscureText: true,
               ),
@@ -168,11 +159,8 @@ class _AuthScreenState extends State<AuthScreen> {
                   padding: const EdgeInsets.only(top: 16.0),
                   child: TextField(
                     controller: _confirmPasswordController,
-                    decoration: InputDecoration(
+                    decoration: const InputDecoration(
                       labelText: 'Confirm Password',
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
                     ),
                     obscureText: true,
                   ),
