@@ -4,7 +4,18 @@ import 'package:shaire/services/bill_service.dart';
 import 'package:image/image.dart' as img;
 
 void main() {
-  test('BillService direct Gemini API extraction parses response structure', () async {
+  test('BillService cleanJsonString extracts valid JSON from markdown code blocks', () {
+    const raw = '```json\n{"merchant_name": "Test Store", "total_amount": 10.0}\n```';
+    expect(BillService.cleanJsonString(raw), '{"merchant_name": "Test Store", "total_amount": 10.0}');
+  });
+
+  test('BillService direct Gemini API extraction parses response structure when key is provided', () async {
+    const apiKey = String.fromEnvironment('GEMINI_API_KEY');
+    if (apiKey.isEmpty) {
+      // Key not provided in test environment, skip network call
+      return;
+    }
+
     final billService = BillService();
 
     // Create a small test image with text

@@ -4,10 +4,12 @@ import 'package:http/http.dart' as http;
 import 'logger_service.dart';
 
 class BillService {
-  static const String _geminiApiKey = String.fromEnvironment(
-    'GEMINI_API_KEY',
-    defaultValue: 'AIzaSyAnwHundO9ztFZCs1p4piNVISHxFtjaxz0',
-  );
+  static const String _defaultGeminiApiKey =
+      String.fromEnvironment('GEMINI_API_KEY');
+  final String _apiKey;
+
+  BillService({String? apiKey}) : _apiKey = apiKey ?? _defaultGeminiApiKey;
+
   static const String _geminiModel = 'gemini-2.5-flash';
   static const String _fallbackBaseUrl = 'https://shaire-backend.vercel.app';
 
@@ -56,14 +58,14 @@ Ensure the JSON is valid and can be parsed by a computer.
   /// Falls back to the backend service if direct API call is unavailable or fails.
   Future<Map<String, dynamic>> extractBillInfo(File imageFile) async {
     // 1. Try direct Google Gemini API call first for minimal latency
-    if (_geminiApiKey.isNotEmpty) {
+    if (_apiKey.isNotEmpty) {
       try {
         LoggerService.info('Extracting bill via direct Gemini API ($_geminiModel)...');
         final bytes = await imageFile.readAsBytes();
         final base64Image = base64Encode(bytes);
 
         final url = Uri.parse(
-          'https://generativelanguage.googleapis.com/v1beta/models/$_geminiModel:generateContent?key=$_geminiApiKey',
+          'https://generativelanguage.googleapis.com/v1beta/models/$_geminiModel:generateContent?key=$_apiKey',
         );
 
         final payload = {
@@ -163,7 +165,7 @@ Ensure the JSON is valid and can be parsed by a computer.
     }
   }
 
-  String _cleanJsonString(String raw) {
+  static String cleanJsonString(String raw) {
     var cleaned = raw.trim();
     if (cleaned.startsWith('```json')) {
       cleaned = cleaned.substring(7);
@@ -176,8 +178,10 @@ Ensure the JSON is valid and can be parsed by a computer.
     return cleaned.trim();
   }
 
+  String _cleanJsonString(String raw) => cleanJsonString(raw);
+
   Future<bool> checkServerHealth() async {
-    if (_geminiApiKey.isNotEmpty) return true;
+    if (_apiKey.isNotEmpty) return true;
     try {
       final response = await http
           .get(Uri.parse('$_fallbackBaseUrl/health'))
