@@ -23,9 +23,15 @@ import 'services/logger_service.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Supabase.initialize(
-    url: 'https://jdopfszmrrcdghgaowme.supabase.co',
-    anonKey:
-        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Impkb3Bmc3ptcnJjZGdoZ2Fvd21lIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQ0MTk1MzgsImV4cCI6MjA1OTk5NTUzOH0.hyuNiGoVf3nKFOYAlzU6iVeFZmVp2u6fjnjqcbFdTjI',
+    url: const String.fromEnvironment(
+      'SUPABASE_URL',
+      defaultValue: 'https://jdopfszmrrcdghgaowme.supabase.co',
+    ),
+    anonKey: const String.fromEnvironment(
+      'SUPABASE_ANON_KEY',
+      defaultValue:
+          'eyJhbGciOi...',    
+    ),
   );
 
   runApp(
