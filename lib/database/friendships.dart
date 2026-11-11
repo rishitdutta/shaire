@@ -46,7 +46,7 @@ class FriendshipService {
       final response = await supabase
           .from('friendships')
           .select('*')
-          .or('user_id_1.eq.$user1.and.user_id_2.eq.$user2, user_id_1.eq.$user2.and.user_id_2.eq.$user1')
+          .or('and(user_id_1.eq.$user1,user_id_2.eq.$user2),and (user_id_1.eq.$user2,user_id_2.eq.$user1)')
           .single();
 
       return Friendship.fromJson(response);
