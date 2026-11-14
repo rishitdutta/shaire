@@ -102,6 +102,8 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
   Timer? _debounceTimer;
   String _payerId = 'you';
   String _payerName = 'You';
+  bool _isMultiplePayers = false;
+  Map<String, double> _payerAmounts = {};
   bool _isDiscardedOrSaved = false;
 
   @override
@@ -126,6 +128,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
     if (amt > 0) return true;
     if (_billEntries.isNotEmpty) return true;
     if (_receiptImageFile != null) return true;
+    if (_isMultiplePayers && _payerAmounts.values.any((v) => v > 0)) return true;
 
     final int prefilledCount =
         (widget.groupId != null ? 1 : 0) + (widget.friendId != null ? 1 : 0);
@@ -161,6 +164,8 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
       friendName: widget.friendName,
       payerId: _payerId,
       payerName: _payerName,
+      isMultiplePayers: _isMultiplePayers,
+      payerAmounts: _payerAmounts,
     );
     await ExpenseDraftService.saveDraft(draft);
   }
@@ -200,6 +205,8 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
       _selectedDate = draft.date;
       _payerId = draft.payerId;
       _payerName = draft.payerName;
+      _isMultiplePayers = draft.isMultiplePayers;
+      _payerAmounts = Map<String, double>.from(draft.payerAmounts);
 
       if (draft.splitType == 'exact' || draft.splitType == 'manual') {
         _splitType = SplitType.manual;
@@ -298,54 +305,383 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
     );
   }
 
+  String get _payerSummaryText {
+    if (!_isMultiplePayers) {
+      return _payerName;
+    }
+    final payersWithAmount = _payerAmounts.entries
+        .where((e) => e.value > 0.01)
+        .toList();
+    if (payersWithAmount.isEmpty) {
+      return 'Multiple people';
+    } else if (payersWithAmount.length == 1) {
+      return _getPayerNameById(payersWithAmount.first.key);
+    } else if (payersWithAmount.length == 2) {
+      final name1 = _getPayerNameById(payersWithAmount[0].key);
+      final name2 = _getPayerNameById(payersWithAmount[1].key);
+      return '$name1 & $name2';
+    } else {
+      return '${payersWithAmount.length} people';
+    }
+  }
+
+  String _getPayerNameById(String id) {
+    if (id == 'you') return 'You';
+    final contact = _selectedContactsData.firstWhere(
+      (c) => c['id'].toString() == id,
+      orElse: () => {'name': 'Friend'},
+    );
+    return contact['name'] as String? ?? 'Friend';
+  }
+
   void _showPayerSelectionDialog() {
     final List<Map<String, dynamic>> payerOptions = [
       {'id': 'you', 'name': 'You (Current User)'},
       ..._selectedContactsData.where((c) => c['isGroup'] != true),
     ];
 
+    bool tempIsMultiple = _isMultiplePayers;
+    String tempPayerId = _payerId;
+    final Map<String, double> tempPayerAmounts =
+        Map<String, double>.from(_payerAmounts);
+    final Map<String, TextEditingController> amountControllers = {};
+
+    for (final opt in payerOptions) {
+      final id = opt['id'].toString();
+      final val = tempPayerAmounts[id];
+      amountControllers[id] = TextEditingController(
+        text: (val != null && val > 0) ? val.toStringAsFixed(2) : '',
+      );
+    }
+
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Who paid for this expense?'),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: ListView.builder(
-            shrinkWrap: true,
-            itemCount: payerOptions.length,
-            itemBuilder: (context, index) {
-              final option = payerOptions[index];
-              final optionId = option['id'].toString();
-              final isCurrent = _payerId == optionId;
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final theme = Theme.of(context);
+          final colorScheme = theme.colorScheme;
+          final currencyProvider =
+              Provider.of<CurrencyProvider>(context, listen: false);
+          final currencySymbol = currencyProvider.currencySymbol;
+          final currentBill =
+              double.tryParse(_totalAmountController.text) ?? 0.0;
+          final currentPaid =
+              tempPayerAmounts.values.fold(0.0, (sum, val) => sum + val);
+          final diff = currentBill - currentPaid;
+          final bool isBalanced = currentBill > 0 && diff.abs() < 0.01;
 
-              return ListTile(
-                leading: CircleAvatar(
-                  child: Icon(optionId == 'you' ? Icons.person : Icons.face),
+          return AlertDialog(
+            title: const Text('Who paid for this expense?'),
+            contentPadding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Mode switcher
+                    Center(
+                      child: SegmentedButton<bool>(
+                        segments: const [
+                          ButtonSegment<bool>(
+                            value: false,
+                            label: Text('Single Person'),
+                            icon: Icon(Icons.person_outline, size: 18),
+                          ),
+                          ButtonSegment<bool>(
+                            value: true,
+                            label: Text('Multiple People'),
+                            icon: Icon(Icons.group_outlined, size: 18),
+                          ),
+                        ],
+                        selected: {tempIsMultiple},
+                        onSelectionChanged: (newSelection) {
+                          setDialogState(() {
+                            tempIsMultiple = newSelection.first;
+                            if (tempIsMultiple && tempPayerAmounts.isEmpty) {
+                              if (currentBill > 0) {
+                                tempPayerAmounts[tempPayerId] = currentBill;
+                                amountControllers[tempPayerId]?.text =
+                                    currentBill.toStringAsFixed(2);
+                              }
+                            }
+                          });
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+
+                    if (!tempIsMultiple) ...[
+                      // Single person list
+                      ...payerOptions.map((option) {
+                        final optionId = option['id'].toString();
+                        final isSelected = tempPayerId == optionId;
+                        return ListTile(
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 2),
+                          leading: CircleAvatar(
+                            backgroundColor: isSelected
+                                ? colorScheme.primaryContainer
+                                : colorScheme.surfaceContainerHighest,
+                            child: Icon(
+                              optionId == 'you' ? Icons.person : Icons.face,
+                              color: isSelected
+                                  ? colorScheme.onPrimaryContainer
+                                  : colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                          title: Text(
+                            option['name'] as String,
+                            style: TextStyle(
+                              fontWeight: isSelected
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                            ),
+                          ),
+                          trailing: isSelected
+                              ? Icon(Icons.check_circle,
+                                  color: colorScheme.primary)
+                              : null,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          onTap: () {
+                            setState(() {
+                              _isMultiplePayers = false;
+                              _payerId = optionId;
+                              _payerName = optionId == 'you'
+                                  ? 'You'
+                                  : (option['name'] as String);
+                            });
+                            Navigator.pop(ctx);
+                            _scheduleAutoSave();
+                          },
+                        );
+                      }),
+                    ] else ...[
+                      // Multiple people mode
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: colorScheme.surfaceContainerLow,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: theme.dividerColor),
+                        ),
+                        child: Column(
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  'Total Bill: ${currencyProvider.format(currentBill)}',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                                Text(
+                                  'Total Paid: ${currencyProvider.format(currentPaid)}',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 13,
+                                    color: isBalanced
+                                        ? Colors.green
+                                        : (diff > 0.01
+                                            ? Colors.orange
+                                            : Colors.red),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: isBalanced
+                                        ? Colors.green.withValues(alpha: 0.15)
+                                        : (diff > 0.01
+                                            ? Colors.orange.withValues(alpha: 0.15)
+                                            : Colors.red.withValues(alpha: 0.15)),
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Text(
+                                    currentBill <= 0
+                                        ? 'Enter bill amount'
+                                        : isBalanced
+                                            ? 'Amounts match ✓'
+                                            : diff > 0.01
+                                                ? '${currencyProvider.format(diff)} remaining'
+                                                : 'Exceeds by ${currencyProvider.format(-diff)}',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.bold,
+                                      color: isBalanced
+                                          ? Colors.green
+                                          : (diff > 0.01
+                                              ? Colors.orange.shade800
+                                              : Colors.red),
+                                    ),
+                                  ),
+                                ),
+                                if (currentBill > 0)
+                                  TextButton.icon(
+                                    onPressed: () {
+                                      setDialogState(() {
+                                        final perPerson = payerOptions.isNotEmpty
+                                            ? (currentBill / payerOptions.length)
+                                            : 0.0;
+                                        for (final opt in payerOptions) {
+                                          final id = opt['id'].toString();
+                                          tempPayerAmounts[id] = perPerson;
+                                          amountControllers[id]?.text = perPerson > 0
+                                              ? perPerson.toStringAsFixed(2)
+                                              : '';
+                                        }
+                                      });
+                                    },
+                                    icon: const Icon(Icons.pie_chart_outline,
+                                        size: 14),
+                                    label: const Text('Split equally',
+                                        style: TextStyle(fontSize: 11)),
+                                    style: TextButton.styleFrom(
+                                      visualDensity: VisualDensity.compact,
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 8, vertical: 4),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+
+                      ...payerOptions.map((option) {
+                        final optionId = option['id'].toString();
+                        final name = optionId == 'you'
+                            ? 'You'
+                            : (option['name'] as String);
+                        final controller = amountControllers[optionId] ??
+                            TextEditingController();
+
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 4.0),
+                          child: Row(
+                            children: [
+                              CircleAvatar(
+                                radius: 16,
+                                backgroundColor:
+                                    colorScheme.surfaceContainerHighest,
+                                child: Icon(
+                                  optionId == 'you' ? Icons.person : Icons.face,
+                                  size: 16,
+                                  color: colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  name,
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w500),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              SizedBox(
+                                width: 110,
+                                height: 40,
+                                child: TextField(
+                                  controller: controller,
+                                  keyboardType: const TextInputType
+                                      .numberWithOptions(decimal: true),
+                                  inputFormatters: [
+                                    FilteringTextInputFormatter.allow(
+                                        RegExp(r'^\d+\.?\d{0,2}')),
+                                  ],
+                                  textAlign: TextAlign.right,
+                                  style: const TextStyle(fontSize: 14),
+                                  decoration: InputDecoration(
+                                    prefixText: currencySymbol,
+                                    prefixStyle: TextStyle(
+                                      fontSize: 14,
+                                      color: colorScheme.onSurfaceVariant,
+                                    ),
+                                    hintText: '0.00',
+                                    isDense: true,
+                                    contentPadding: const EdgeInsets.symmetric(
+                                        horizontal: 10, vertical: 8),
+                                    border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(8),
+                                      borderSide:
+                                          BorderSide(color: theme.dividerColor),
+                                    ),
+                                    enabledBorder: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(8),
+                                      borderSide:
+                                          BorderSide(color: theme.dividerColor),
+                                    ),
+                                  ),
+                                  onChanged: (val) {
+                                    setDialogState(() {
+                                      final parsed =
+                                          double.tryParse(val) ?? 0.0;
+                                      tempPayerAmounts[optionId] = parsed;
+                                    });
+                                  },
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
+                    ],
+                  ],
                 ),
-                title: Text(option['name'] as String),
-                trailing: isCurrent
-                    ? const Icon(Icons.check, color: Colors.green)
-                    : null,
-                onTap: () {
-                  setState(() {
-                    _payerId = optionId;
-                    _payerName = optionId == 'you'
-                        ? 'You'
-                        : (option['name'] as String);
-                  });
-                  Navigator.pop(ctx);
-                  _scheduleAutoSave();
-                },
-              );
-            },
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-        ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
+              ),
+              if (tempIsMultiple)
+                ElevatedButton(
+                  onPressed: () {
+                    if (currentBill > 0 &&
+                        (currentPaid - currentBill).abs() > 0.05) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'Total paid (${currencyProvider.format(currentPaid)}) must match bill amount (${currencyProvider.format(currentBill)})',
+                          ),
+                          backgroundColor: Colors.red,
+                          duration: const Duration(seconds: 2),
+                        ),
+                      );
+                      return;
+                    }
+                    if (currentBill == 0 && currentPaid > 0) {
+                      _totalAmountController.text =
+                          currentPaid.toStringAsFixed(2);
+                    }
+                    setState(() {
+                      _isMultiplePayers = true;
+                      _payerAmounts = Map<String, double>.from(tempPayerAmounts);
+                    });
+                    Navigator.pop(ctx);
+                    _scheduleAutoSave();
+                  },
+                  child: const Text('Done'),
+                ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -469,6 +805,11 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
       _individualPercentControllers[id]?.dispose();
       _individualAmountControllers.remove(id);
       _individualPercentControllers.remove(id);
+      _payerAmounts.remove(id);
+      if (_payerId == id) {
+        _payerId = 'you';
+        _payerName = 'You';
+      }
 
       // Recalculate splits
       _updateSplitAmounts();
@@ -718,6 +1059,8 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
                     individualAmountControllers: _individualAmountControllers,
                     individualPercentControllers: _individualPercentControllers,
                     payerId: _payerId,
+                    isMultiplePayers: _isMultiplePayers,
+                    payerAmounts: _payerAmounts,
                     onSplitTypeChanged: (type) {
                       setState(() {
                         _splitType = type;
@@ -856,10 +1199,12 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
             const SizedBox(width: 8),
             ActionChip(
               avatar: Icon(
-                _payerId == 'you' ? Icons.person : Icons.face,
+                _isMultiplePayers
+                    ? Icons.group
+                    : (_payerId == 'you' ? Icons.person : Icons.face),
                 size: 16,
               ),
-              label: Text(_payerName),
+              label: Text(_payerSummaryText),
               onPressed: _showPayerSelectionDialog,
             ),
           ],
@@ -1423,7 +1768,30 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
 
       final currentUserName = _getCurrentUserName();
       final isUserPayer = _payerId == 'you';
-      final effectivePayerName = isUserPayer ? currentUserName : _payerName;
+      String effectivePayerName;
+      if (_isMultiplePayers) {
+        final payers = <String>[];
+        if ((_payerAmounts['you'] ?? 0.0) > 0.01) {
+          payers.add(currentUserName);
+        }
+        for (final contact in _selectedContactsData) {
+          final id = contact['id'].toString();
+          if ((_payerAmounts[id] ?? 0.0) > 0.01) {
+            payers.add(contact['name'] as String);
+          }
+        }
+        if (payers.isEmpty) {
+          effectivePayerName = currentUserName;
+        } else if (payers.length == 1) {
+          effectivePayerName = payers.first;
+        } else if (payers.length == 2) {
+          effectivePayerName = '${payers[0]} & ${payers[1]}';
+        } else {
+          effectivePayerName = '${payers.length} people';
+        }
+      } else {
+        effectivePayerName = isUserPayer ? currentUserName : _payerName;
+      }
 
       final List<Map<String, dynamic>> participantShares = [];
 
@@ -1433,11 +1801,14 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
               (_selectedContactsData.isEmpty
                   ? totalAmount
                   : totalAmount / (_selectedContactsData.length + 1));
+      final yourPaid = _isMultiplePayers
+          ? (_payerAmounts['you'] ?? 0.0)
+          : (isUserPayer ? totalAmount : 0.0);
 
       participantShares.add({
         'name': currentUserName,
         'share': yourShare,
-        'paid': isUserPayer ? totalAmount : 0.0,
+        'paid': yourPaid,
       });
 
       // Add friends
@@ -1448,10 +1819,13 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
         final share =
             double.tryParse(_individualAmountControllers[id]?.text ?? '') ??
                 (totalAmount / (_selectedContactsData.length + 1));
+        final paid = _isMultiplePayers
+            ? (_payerAmounts[id] ?? 0.0)
+            : (isThisFriendPayer ? totalAmount : 0.0);
         participantShares.add({
           'name': name,
           'share': share,
-          'paid': isThisFriendPayer ? totalAmount : 0.0,
+          'paid': paid,
         });
       }
 
@@ -1511,6 +1885,24 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Please select at least one friend or group')));
       return;
+    }
+
+    if (_isMultiplePayers) {
+      final totalAmount = double.tryParse(_totalAmountController.text) ?? 0.0;
+      final sumPaid = _payerAmounts.values.fold(0.0, (sum, val) => sum + val);
+      if (totalAmount > 0 && (sumPaid - totalAmount).abs() > 0.05) {
+        final currencySymbol =
+            Provider.of<CurrencyProvider>(context, listen: false).currencySymbol;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Total paid ($currencySymbol${sumPaid.toStringAsFixed(2)}) does not match expense amount ($currencySymbol${totalAmount.toStringAsFixed(2)}). Please adjust payer amounts.',
+            ),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
     }
 
     if (_formKey.currentState!.validate()) {
@@ -1784,13 +2176,34 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
         break;
     }
 
+    // Build userPaid mapping
+    final Map<String, double> userPaid = {};
+    if (_isMultiplePayers) {
+      userPaid[currentUserId] = _payerAmounts['you'] ?? 0.0;
+      for (final contact in selectedContacts) {
+        final id = contact['id'].toString();
+        final isCustom = contact['is_custom'] == true;
+        final linkedId = contact['linked_user_id']?.toString();
+        final actualId = (isCustom && linkedId != null && linkedId.isNotEmpty)
+            ? linkedId
+            : id;
+        final amt = _payerAmounts[id] ?? _payerAmounts[actualId] ?? 0.0;
+        userPaid[actualId] = amt;
+      }
+    } else {
+      for (final p in allParticipantsList) {
+        final id = p['id'] as String;
+        userPaid[id] = (id == effectivePayerId) ? totalAmount : 0.0;
+      }
+    }
+
     // Build participant rows ONLY for registered profiles (prevents foreign key violation)
     final participants = registeredParticipantIds.map((uid) {
       return {
         'expense_id': expenseId,
         'user_id': uid,
         'share_amount': userShares[uid] ?? 0.0,
-        'paid_amount': (uid == effectivePayerId) ? totalAmount : 0.0,
+        'paid_amount': userPaid[uid] ?? 0.0,
         'settled': false,
       };
     }).toList();
@@ -1801,31 +2214,90 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
       await _supabase.from('expense_participants').insert(participants);
     }
 
-    // Update balances table for each non-payer registered participant
+    // Calculate net positions for all participants
+    // net = paid - share
+    // If net > 0: Creditor (they are owed money)
+    // If net < 0: Debtor (they owe money)
+    final Map<String, double> creditors = {};
+    final Map<String, double> debtors = {};
+
+    for (final p in allParticipantsList) {
+      final id = p['id'] as String;
+      final paid = userPaid[id] ?? 0.0;
+      final share = userShares[id] ?? 0.0;
+      final net = paid - share;
+
+      if (net > 0.005) {
+        creditors[id] = net;
+      } else if (net < -0.005) {
+        debtors[id] = -net;
+      }
+    }
+
+    final double totalCredit =
+        creditors.values.fold(0.0, (sum, val) => sum + val);
+
     final balanceService = BalanceService();
-    for (final p in participants) {
-      final uid = p['user_id'] as String;
-      if (uid != effectivePayerId) {
-        final share = (p['share_amount'] as num).toDouble();
-        if (share > 0) {
-          if (effectivePayerId == currentUserId) {
-            // Friend owes you
-            await balanceService.adjustBalance(
-              fromUserId: currentUserId,
-              toUserId: uid,
-              deltaAmount: share,
-              currency: currencyCode,
-              groupId: groupId,
-            );
-          } else if (uid == currentUserId) {
-            // You owe the friend who paid
-            await balanceService.adjustBalance(
-              fromUserId: currentUserId,
-              toUserId: effectivePayerId,
-              deltaAmount: -share,
-              currency: currencyCode,
-              groupId: groupId,
-            );
+    final Set<String> unlinkedCustomIds =
+        unlinkedCustomFriends.map((c) => c['id'].toString()).toSet();
+
+    if (totalCredit > 0.005) {
+      for (final debtorEntry in debtors.entries) {
+        final debtorId = debtorEntry.key;
+        final debt = debtorEntry.value;
+
+        for (final creditorEntry in creditors.entries) {
+          final creditorId = creditorEntry.key;
+          final credit = creditorEntry.value;
+
+          // Proportional share of debt: amount debtor owes creditor
+          final amountOwed = (debt * credit) / totalCredit;
+          if (amountOwed <= 0.005) continue;
+
+          if (debtorId == currentUserId) {
+            // Current user owes creditor
+            if (unlinkedCustomIds.contains(creditorId)) {
+              await CustomFriendBalanceService.adjustBalance(
+                customFriendId: creditorId,
+                deltaAmount: -amountOwed,
+              );
+            } else {
+              await balanceService.adjustBalance(
+                fromUserId: currentUserId,
+                toUserId: creditorId,
+                deltaAmount: -amountOwed,
+                currency: currencyCode,
+                groupId: groupId,
+              );
+            }
+          } else if (creditorId == currentUserId) {
+            // Debtor owes current user
+            if (unlinkedCustomIds.contains(debtorId)) {
+              await CustomFriendBalanceService.adjustBalance(
+                customFriendId: debtorId,
+                deltaAmount: amountOwed,
+              );
+            } else {
+              await balanceService.adjustBalance(
+                fromUserId: currentUserId,
+                toUserId: debtorId,
+                deltaAmount: amountOwed,
+                currency: currencyCode,
+                groupId: groupId,
+              );
+            }
+          } else {
+            // Neither is current user - if both are registered users (e.g. in a group)
+            if (!unlinkedCustomIds.contains(debtorId) &&
+                !unlinkedCustomIds.contains(creditorId)) {
+              await balanceService.adjustBalance(
+                fromUserId: creditorId,
+                toUserId: debtorId,
+                deltaAmount: amountOwed,
+                currency: currencyCode,
+                groupId: groupId,
+              );
+            }
           }
         }
       }
@@ -1835,22 +2307,9 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
     for (final cf in unlinkedCustomFriends) {
       final cfId = cf['id'].toString();
       final share = userShares[cfId] ?? 0.0;
-      final paidByYou = effectivePayerId == currentUserId;
-
-      if (paidByYou) {
-        // Custom friend owes you their share
-        await CustomFriendBalanceService.adjustBalance(
-          customFriendId: cfId,
-          deltaAmount: share,
-        );
-      } else if (cfId == effectivePayerId) {
-        // Custom friend paid full amount: you owe them your share
-        final yourShare = userShares[currentUserId] ?? 0.0;
-        await CustomFriendBalanceService.adjustBalance(
-          customFriendId: cfId,
-          deltaAmount: -yourShare,
-        );
-      }
+      final paid = userPaid[cfId] ?? 0.0;
+      final userPaidAmount = userPaid[currentUserId] ?? 0.0;
+      final paidByYou = userPaidAmount >= totalAmount - 0.01;
 
       await CustomFriendBalanceService.recordParticipation(
         expenseId: expenseId,
@@ -1862,8 +2321,10 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
         friendShare: share,
         paidByYou: paidByYou,
         date: _selectedDate,
-        payerId: effectivePayerId,
-        paidAmount: (cfId == effectivePayerId) ? totalAmount : 0.0,
+        payerId: _isMultiplePayers
+            ? 'multiple'
+            : (_payerId == 'you' ? currentUserId : _payerId),
+        paidAmount: paid,
       );
     }
 

@@ -394,6 +394,38 @@ class FriendProvider with ChangeNotifier {
     }
   }
 
+  Future<void> deleteFriend(String friendId, {bool isCustom = false}) async {
+    if (currentUserId == null) throw Exception("Not logged in");
+    if (isCustom) {
+      await deleteCustomFriend(friendId);
+      return;
+    }
+    try {
+      await _supabase
+          .from('friendships')
+          .delete()
+          .or('and(user_id_1.eq.$currentUserId,user_id_2.eq.$friendId),and(user_id_1.eq.$friendId,user_id_2.eq.$currentUserId)');
+      await fetchFriendsAndRequests();
+    } catch (e) {
+      LoggerService.error("Error deleting friend", e);
+      rethrow;
+    }
+  }
+
+  Future<void> renameCustomFriend(String customFriendId, String newName) async {
+    if (currentUserId == null) throw Exception("Not logged in");
+    try {
+      await _supabase
+          .from('custom_friends')
+          .update({'name': newName.trim()})
+          .eq('id', customFriendId);
+      await fetchFriendsAndRequests();
+    } catch (e) {
+      LoggerService.error("Error renaming custom friend", e);
+      rethrow;
+    }
+  }
+
   /// Fetch full friend profile, shared expenses, payments, and pairwise balances
   Future<Map<String, dynamic>> fetchFriendDetailsAndSharedData(dynamic friendId) async {
     final userId = currentUserId;

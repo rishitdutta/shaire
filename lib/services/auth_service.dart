@@ -4,7 +4,10 @@ import '../providers/user_provider.dart';
 import 'package:provider/provider.dart';
 
 class AuthService {
-  final SupabaseClient supabase = Supabase.instance.client;
+  final SupabaseClient? _client;
+  AuthService([this._client]);
+
+  SupabaseClient get supabase => _client ?? Supabase.instance.client;
 
   // Sign out function
   Future<void> signOut(BuildContext context) async {
@@ -26,5 +29,36 @@ class AuthService {
         );
       }
     }
+  }
+
+  /// Sends a password reset email using Supabase Auth.
+  Future<void> sendPasswordResetEmail(String email) async {
+    await supabase.auth.resetPasswordForEmail(email.trim());
+  }
+
+  /// Verifies an OTP recovery code and sets a new password.
+  Future<void> verifyRecoveryCodeAndResetPassword({
+    required String email,
+    required String code,
+    required String newPassword,
+  }) async {
+    final response = await supabase.auth.verifyOTP(
+      email: email.trim(),
+      token: code.trim(),
+      type: OtpType.recovery,
+    );
+    if (response.session == null && response.user == null) {
+      throw const AuthException('Invalid or expired recovery code');
+    }
+    await supabase.auth.updateUser(
+      UserAttributes(password: newPassword),
+    );
+  }
+
+  /// Updates the user's password (e.g. after arriving via password recovery link).
+  Future<void> updatePassword(String newPassword) async {
+    await supabase.auth.updateUser(
+      UserAttributes(password: newPassword),
+    );
   }
 }

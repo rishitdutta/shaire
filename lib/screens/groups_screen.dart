@@ -6,6 +6,7 @@ import '../providers/group_provider.dart'; // <-- Import
 import '../widgets/friend_selection_widget.dart';
 import '../widgets/loading_spinner.dart';
 import '../widgets/add_friend_dialog.dart';
+import '../widgets/friend_quick_action_modal.dart';
 import 'friend_details_screen.dart';
 import 'group_details_screen.dart';
 
@@ -371,6 +372,22 @@ class _GroupsScreenState extends State<GroupsScreen>
                                   friendProvider.fetchFriendsAndRequests();
                                 }
                               });
+                            },
+                            onLongPress: () {
+                              FriendQuickActionModal.show(
+                                context,
+                                friend: item,
+                                onFriendDeleted: () {
+                                  if (mounted) {
+                                    friendProvider.fetchFriendsAndRequests();
+                                  }
+                                },
+                                onExpenseAdded: () {
+                                  if (mounted) {
+                                    friendProvider.fetchFriendsAndRequests();
+                                  }
+                                },
+                              );
                             },
                           ),
                         );

@@ -10,6 +10,7 @@ import '../database/payment.dart';
 import '../services/custom_friend_balance_service.dart';
 import '../widgets/loading_spinner.dart';
 import '../widgets/link_friend_dialog.dart';
+import '../widgets/friend_quick_action_modal.dart';
 import 'add_expense_screen.dart';
 import 'expense_details_screen.dart';
 
@@ -179,6 +180,27 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
     ).then((_) => _loadFriendDetails());
   }
 
+  void _openQuickExpense() {
+    if (_friendProfile == null) return;
+    final friendData = {
+      'id': widget.friendId,
+      'full_name': _friendProfile?['full_name'],
+      'username': _friendProfile?['username'],
+      'is_custom': _isCustomFriend,
+      'linked_user_id': _friendProfile?['linked_user_id'],
+    };
+    FriendQuickActionModal.show(
+      context,
+      friend: friendData,
+      onExpenseAdded: () {
+        _loadFriendDetails();
+      },
+      onFriendDeleted: () {
+        Navigator.pop(context);
+      },
+    );
+  }
+
   Future<void> _openExpenseDetails(Map<String, dynamic> exp) async {
     final currencyProvider =
         Provider.of<CurrencyProvider>(context, listen: false);
@@ -320,6 +342,11 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
             theme.textTheme.titleLarge?.copyWith(color: onPrimaryColor),
         title: Text(friendName),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.receipt_long_outlined),
+            tooltip: 'Full Expense / Receipt Scan',
+            onPressed: _navigateToAddExpense,
+          ),
           if (_isCustomFriend && !_isLinked)
             IconButton(
               icon: const Icon(Icons.link),
@@ -375,24 +402,29 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
                       ),
                     ],
                   ),
-                  if (_netBalance != 0) ...[
-                    const SizedBox(height: 16),
-                    ElevatedButton(
-                      onPressed: _settleUp,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: primaryColor,
-                        foregroundColor: onPrimaryColor,
+                  const SizedBox(height: 16),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 8,
+                    alignment: WrapAlignment.center,
+                    children: [
+                      ElevatedButton.icon(
+                        onPressed: _openQuickExpense,
+                        icon: const Icon(Icons.bolt, size: 18),
+                        label: const Text('Quick Expense'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: primaryColor,
+                          foregroundColor: onPrimaryColor,
+                        ),
                       ),
-                      child: const Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.handshake),
-                          SizedBox(width: 8),
-                          Text('Settle Up'),
-                        ],
-                      ),
-                    ),
-                  ],
+                      if (_netBalance != 0)
+                        OutlinedButton.icon(
+                          onPressed: _settleUp,
+                          icon: const Icon(Icons.handshake, size: 18),
+                          label: const Text('Settle Up'),
+                        ),
+                    ],
+                  ),
                 ],
               ),
             ),
@@ -572,14 +604,13 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
           ),
         ],
       ),
-      floatingActionButton: _tabController.index == 0
-          ? FloatingActionButton(
-              onPressed: _navigateToAddExpense,
-              backgroundColor: primaryColor,
-              foregroundColor: onPrimaryColor,
-              child: const Icon(Icons.add),
-            )
-          : null,
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _openQuickExpense,
+        backgroundColor: primaryColor,
+        foregroundColor: onPrimaryColor,
+        icon: const Icon(Icons.bolt),
+        label: const Text('Quick Expense'),
+      ),
     );
   }
 }

@@ -21,6 +21,8 @@ class ExpenseDraft {
   final String? friendName;
   final String payerId;
   final String payerName;
+  final bool isMultiplePayers;
+  final Map<String, double> payerAmounts;
   final DateTime lastUpdated;
 
   ExpenseDraft({
@@ -41,6 +43,8 @@ class ExpenseDraft {
     this.friendName,
     this.payerId = 'you',
     this.payerName = 'You',
+    this.isMultiplePayers = false,
+    this.payerAmounts = const {},
     DateTime? lastUpdated,
   })  : date = date ?? DateTime.now(),
         lastUpdated = lastUpdated ?? DateTime.now();
@@ -77,6 +81,8 @@ class ExpenseDraft {
         'friendName': friendName,
         'payerId': payerId,
         'payerName': payerName,
+        'isMultiplePayers': isMultiplePayers,
+        'payerAmounts': payerAmounts,
         'lastUpdated': lastUpdated.toIso8601String(),
       };
 
@@ -123,6 +129,11 @@ class ExpenseDraft {
       friendName: json['friendName'] as String?,
       payerId: json['payerId'] as String? ?? 'you',
       payerName: json['payerName'] as String? ?? 'You',
+      isMultiplePayers: json['isMultiplePayers'] as bool? ?? false,
+      payerAmounts: (json['payerAmounts'] as Map?)?.map(
+            (k, v) => MapEntry(k.toString(), (v as num).toDouble()),
+          ) ??
+          {},
       lastUpdated: json['lastUpdated'] != null
           ? DateTime.tryParse(json['lastUpdated'] as String) ?? DateTime.now()
           : DateTime.now(),

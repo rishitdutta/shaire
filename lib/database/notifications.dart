@@ -78,7 +78,11 @@ class NotificationService {
   /// Create a new notification
   Future<bool> createNotification(Notification notification) async {
     try {
-      await supabase.from('notifications').insert(notification.toJson());
+      final json = notification.toJson();
+      if (notification.id == 0) {
+        json.remove('id');
+      }
+      await supabase.from('notifications').insert(json);
       LoggerService.info('Notification created successfully');
       return true;
     } catch (error) {

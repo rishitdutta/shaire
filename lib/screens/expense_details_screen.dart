@@ -183,22 +183,24 @@ class _ExpenseDetailsScreenState extends State<ExpenseDetailsScreen> {
         ));
       }
 
-      // Determine payer
-      final payerItem = list.firstWhere(
-        (p) => p.paidAmount > 0,
-        orElse: () => _ParticipantItem(
-          id: widget.expense.createdBy,
-          name: widget.expense.createdBy == currentUserId ? 'You' : 'Creator',
-          shareAmount: 0,
-          paidAmount: 0,
-          isYou: widget.expense.createdBy == currentUserId,
-        ),
-      );
+      // Determine payer(s)
+      final payers = list.where((p) => p.paidAmount > 0.01).toList();
+      String computedPayerName;
+      if (payers.isEmpty) {
+        computedPayerName =
+            widget.expense.createdBy == currentUserId ? 'You' : 'Creator';
+      } else if (payers.length == 1) {
+        computedPayerName = payers.first.name;
+      } else if (payers.length == 2) {
+        computedPayerName = '${payers[0].name} & ${payers[1].name}';
+      } else {
+        computedPayerName = '${payers.length} people';
+      }
 
       if (mounted) {
         setState(() {
           _participants = list;
-          _payerName = payerItem.name;
+          _payerName = computedPayerName;
           _loading = false;
         });
       }
@@ -240,8 +242,26 @@ class _ExpenseDetailsScreenState extends State<ExpenseDetailsScreen> {
     try {
       final currencyProvider = Provider.of<CurrencyProvider>(context, listen: false);
       final currentUserName = _getCurrentUserName();
-      final effectivePayerName =
-          (_payerName.toLowerCase() == 'you') ? currentUserName : _payerName;
+      final payers = _participants.where((p) => p.paidAmount > 0.01).toList();
+      String effectivePayerName;
+      if (payers.isEmpty) {
+        effectivePayerName = currentUserName;
+      } else if (payers.length == 1) {
+        effectivePayerName =
+            (payers[0].isYou || payers[0].name.toLowerCase() == 'you')
+                ? currentUserName
+                : payers[0].name;
+      } else if (payers.length == 2) {
+        final n1 = (payers[0].isYou || payers[0].name.toLowerCase() == 'you')
+            ? currentUserName
+            : payers[0].name;
+        final n2 = (payers[1].isYou || payers[1].name.toLowerCase() == 'you')
+            ? currentUserName
+            : payers[1].name;
+        effectivePayerName = '$n1 & $n2';
+      } else {
+        effectivePayerName = '${payers.length} people';
+      }
 
       Uint8List? receiptBytes;
       if (widget.expense.receiptImageUrl != null &&
@@ -571,7 +591,7 @@ class _ExpenseDetailsScreenState extends State<ExpenseDetailsScreen> {
                                     ),
                                     Text(
                                       isPayer
-                                          ? 'Paid ${currencyProvider.format(p.paidAmount)}'
+                                          ? 'Paid ${currencyProvider.format(p.paidAmount)} · Share: ${currencyProvider.format(p.shareAmount)}'
                                           : 'Share: ${currencyProvider.format(p.shareAmount)}',
                                       style: theme.textTheme.bodySmall?.copyWith(
                                         color: colorScheme.onSurfaceVariant,
