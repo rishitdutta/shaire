@@ -140,7 +140,8 @@ class PredictionProvider with ChangeNotifier {
     } catch (e) {
       LoggerService.error('Error fetching predictions', e);
       _hasError = true;
-      _errorMessage = 'Could not reach prediction service. Please pull to refresh to try again.';
+      _errorMessage =
+          'Could not reach prediction service. Please pull to refresh to try again.';
       _isLoading = false;
       notifyListeners();
     }

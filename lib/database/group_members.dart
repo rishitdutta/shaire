@@ -48,7 +48,7 @@ class GroupMemberService {
           .select('*')
           .eq('group_id', groupId)
           .eq('user_id', userId)
-          .maybeSingle();  // Fetch a single row or return null if no match
+          .maybeSingle(); // Fetch a single row or return null if no match
 
       if (response == null) {
         LoggerService.warning('Group member not found');

@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shaire/providers/expense_provider.dart';
@@ -9,6 +8,7 @@ import '../services/logger_service.dart';
 import '../widgets/loading_spinner.dart';
 import '../services/expense_draft_service.dart';
 import '../database/expense.dart';
+import '../theme/theme.dart';
 import 'add_expense_screen.dart';
 import 'expense_details_screen.dart';
 
@@ -24,7 +24,7 @@ final RouteObserver<PageRoute> routeObserver = RouteObserver<PageRoute>();
 class _HomeScreenState extends State<HomeScreen>
     with SingleTickerProviderStateMixin, RouteAware {
   late AnimationController _animationController;
-  bool _isLoading = true;
+  bool _hasLoadedOnce = false;
   double _youGet = 0;
   double _youOwe = 0;
   final Set<String> _hiddenActivityIds = {};
@@ -42,6 +42,7 @@ class _HomeScreenState extends State<HomeScreen>
 
   Future<void> _loadHiddenActivityIds() async {
     final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
     setState(() {
       _hiddenActivityIds.addAll(prefs.getStringList('hiddenActivityIds') ?? []);
     });
@@ -61,29 +62,38 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
-  Future<void> _fetchData() async {
-    setState(() => _isLoading = true);
+  /// `force: false` (tab returns) is served from the provider's TTL cache —
+  /// instant, no spinner, no network if the data is young. Pull-to-refresh
+  /// passes `force: true` to bypass it.
+  Future<void> _fetchData({bool force = false}) async {
+    if (!_hasLoadedOnce && mounted) {
+      setState(() {});
+    }
 
     try {
       final expenseProvider =
           Provider.of<ExpenseProvider>(context, listen: false);
-      final balancesFuture = expenseProvider.fetchUserOverallBalances();
-      final expensesFuture = expenseProvider.fetchExpenses();
+      final balancesFuture =
+          expenseProvider.fetchUserOverallBalances(force: force);
+      final expensesFuture = expenseProvider.fetchExpenses(force: force);
       final draftFuture = _checkDraft();
 
-      final results = await Future.wait([balancesFuture, expensesFuture, draftFuture]);
+      final results =
+          await Future.wait([balancesFuture, expensesFuture, draftFuture]);
       final balances = results[0] as Map<String, double>;
 
       if (!mounted) return;
       setState(() {
         _youGet = balances['youGet'] ?? 0.0;
         _youOwe = balances['youOwe'] ?? 0.0;
-        _isLoading = false;
+        _hasLoadedOnce = true;
       });
     } catch (e) {
       LoggerService.error('Error fetching data in home_screen: $e');
       if (mounted) {
-        setState(() => _isLoading = false);
+        setState(() {
+          _hasLoadedOnce = true;
+        });
       }
     }
   }
@@ -99,7 +109,7 @@ class _HomeScreenState extends State<HomeScreen>
     } else if (dateToCheck == yesterday) {
       return 'Yesterday';
     } else {
-      return DateFormat('yyyy-MM-dd').format(date);
+      return DateFormat('MMM d, yyyy').format(date);
     }
   }
 
@@ -124,30 +134,6 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
-  Future<bool> _onWillPop() async {
-    final shouldExit = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Exit App'),
-        content: const Text('Do you want to exit the app?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => exit(0),
-            style: TextButton.styleFrom(
-              foregroundColor: Colors.red,
-            ),
-            child: const Text('Exit'),
-          ),
-        ],
-      ),
-    );
-    return shouldExit ?? false;
-  }
-
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -156,7 +142,6 @@ class _HomeScreenState extends State<HomeScreen>
 
   @override
   void dispose() {
-    // Unsubscribe from the RouteObserver
     routeObserver.unsubscribe(this);
     _animationController.dispose();
     super.dispose();
@@ -170,30 +155,34 @@ class _HomeScreenState extends State<HomeScreen>
     _fetchData();
   }
 
-  Widget _buildRecentActivities(BuildContext context) {
-    return Expanded(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0),
-            child: Text(
-              'Recent Activity',
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
-          ),
-          const SizedBox(height: 8),
-          if (_activeDraft != null) ...[
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16.0),
-              child: _buildDraftBanner(context),
-            ),
-            const SizedBox(height: 8),
-          ],
-          Expanded(
-            child: _buildActivityList(context),
-          ),
-        ],
+  // ── Activity rows ───────────────────────────────────────────────────────
+
+  void _hideActivity(String id, {String? title}) {
+    setState(() {
+      _hiddenActivityIds.add(id);
+    });
+    _saveHiddenActivityIds();
+
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          title == null
+              ? 'Removed from recent activity'
+              : 'Removed “$title” from recent activity',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        action: SnackBarAction(
+          label: 'Undo',
+          onPressed: () {
+            setState(() {
+              _hiddenActivityIds.remove(id);
+            });
+            _saveHiddenActivityIds();
+          },
+        ),
       ),
     );
   }
@@ -208,12 +197,14 @@ class _HomeScreenState extends State<HomeScreen>
     final amountText = (draft.totalAmount != null && draft.totalAmount! > 0)
         ? currencyProvider.format(draft.totalAmount!)
         : 'Draft in progress';
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Container(
       decoration: BoxDecoration(
-        color: Colors.amber.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.amber.shade600, width: 1.5),
+        color: Colors.amber.withValues(alpha: isDark ? 0.12 : 0.10),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+            color: Colors.amber.shade600.withValues(alpha: 0.7), width: 1.2),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       child: Row(
@@ -259,48 +250,36 @@ class _HomeScreenState extends State<HomeScreen>
             icon: const Icon(Icons.play_arrow, size: 18),
             label: const Text('Resume'),
             style: TextButton.styleFrom(
-              foregroundColor: Colors.amber.shade900,
-              backgroundColor: Colors.amber.shade100,
+              foregroundColor:
+                  isDark ? Colors.amber.shade200 : Colors.amber.shade900,
+              backgroundColor: Colors.amber.withValues(alpha: 0.18),
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             ),
-            onPressed: () {
-              Navigator.push(
+            onPressed: () async {
+              await Navigator.push(
                 context,
                 MaterialPageRoute(
                   builder: (context) =>
                       const AddExpenseScreen(resumeDraft: true),
                 ),
-              ).then((_) => _checkDraft());
+              );
+              _checkDraft();
+              if (!mounted) return;
+              _fetchData(force: true);
             },
           ),
           IconButton(
-            icon: const Icon(Icons.close, size: 18, color: Colors.grey),
+            icon: const Icon(Icons.close, size: 18),
+            visualDensity: VisualDensity.compact,
             tooltip: 'Discard Draft',
             onPressed: () async {
-              final confirm = await showDialog<bool>(
-                context: context,
-                builder: (ctx) => AlertDialog(
-                  title: const Text('Discard Draft?'),
-                  content: const Text(
-                    'Are you sure you want to discard this unfinished expense?',
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(ctx, false),
-                      child: const Text('Cancel'),
-                    ),
-                    TextButton(
-                      style: TextButton.styleFrom(foregroundColor: Colors.red),
-                      onPressed: () => Navigator.pop(ctx, true),
-                      child: const Text('Discard'),
-                    ),
-                  ],
-                ),
+              final messenger = ScaffoldMessenger.of(context);
+              await ExpenseDraftService.clearDraft();
+              if (!mounted) return;
+              setState(() => _activeDraft = null);
+              messenger.showSnackBar(
+                const SnackBar(content: Text('Draft discarded')),
               );
-              if (confirm == true) {
-                await ExpenseDraftService.clearDraft();
-                _checkDraft();
-              }
             },
           ),
         ],
@@ -316,12 +295,13 @@ class _HomeScreenState extends State<HomeScreen>
     IconData icon,
   ) {
     final currencyProvider = Provider.of<CurrencyProvider>(context);
+    final theme = Theme.of(context);
     return Expanded(
       child: Row(
         children: [
           CircleAvatar(
             radius: 16,
-            backgroundColor: iconColor.withValues(alpha: 0.2),
+            backgroundColor: theme.colorScheme.surface,
             child: Icon(
               icon,
               size: 16,
@@ -329,26 +309,31 @@ class _HomeScreenState extends State<HomeScreen>
             ),
           ),
           const SizedBox(width: 8),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label,
-                style: Theme.of(context).textTheme.bodySmall!.copyWith(
-                      color: Theme.of(context)
-                          .colorScheme
-                          .onPrimary
-                          .withValues(alpha: 0.8),
-                    ),
-              ),
-              Text(
-                currencyProvider.format(amount),
-                style: Theme.of(context).textTheme.titleMedium!.copyWith(
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: theme.textTheme.bodySmall!.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                // FittedBox keeps large amounts (₹1,23,456.00) on one line
+                // on narrow phones instead of overflowing.
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    currencyProvider.format(amount),
+                    style: theme.textTheme.titleMedium!.copyWith(
                       fontWeight: FontWeight.bold,
-                      color: Theme.of(context).colorScheme.onPrimary,
+                      color: theme.colorScheme.onSurface,
                     ),
-              ),
-            ],
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -363,7 +348,6 @@ class _HomeScreenState extends State<HomeScreen>
     String action,
     double amount,
     IconData icon,
-    VoidCallback onRemove,
   ) {
     final currencyProvider = Provider.of<CurrencyProvider>(context);
 
@@ -377,16 +361,19 @@ class _HomeScreenState extends State<HomeScreen>
             MaterialPageRoute(
               builder: (_) => ExpenseDetailsScreen(expense: expense),
             ),
-          );
+          ).then((_) {
+            if (mounted) _fetchData();
+          });
         },
         child: Padding(
-          padding: const EdgeInsets.all(12.0),
+          padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
           child: Row(
             children: [
               CircleAvatar(
                 radius: 20,
                 backgroundColor: Theme.of(context).colorScheme.primaryContainer,
-                child: Icon(icon, color: Theme.of(context).colorScheme.primary),
+                child: Icon(icon,
+                    color: Theme.of(context).colorScheme.onPrimaryContainer),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -406,14 +393,20 @@ class _HomeScreenState extends State<HomeScreen>
                   ],
                 ),
               ),
-              Text(
-                currencyProvider.format(amount),
-                style: const TextStyle(fontWeight: FontWeight.bold),
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  currencyProvider.format(amount),
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
               ),
+              // Swipe or tap the ✕; both remove instantly with an Undo snack —
+              // no modal confirm dialog interrupting the flow.
               IconButton(
-                icon: const Icon(Icons.close, color: Colors.redAccent),
+                icon: const Icon(Icons.close, size: 18),
+                visualDensity: VisualDensity.compact,
                 tooltip: 'Remove from Recent Activity',
-                onPressed: onRemove,
+                onPressed: () => _hideActivity(id, title: title),
               ),
             ],
           ),
@@ -422,7 +415,8 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  Widget _buildActivityList(BuildContext context) {
+  /// Builds the flattened list of (date header + cards) rows for the sliver.
+  List<Widget> _buildActivityRows(BuildContext context) {
     final expenseProvider = Provider.of<ExpenseProvider>(context);
     final expenses = expenseProvider.expenses;
 
@@ -436,10 +430,7 @@ class _HomeScreenState extends State<HomeScreen>
       final dateKey = _formatDateKey(expense.date);
       final isMyExpense = expense.createdBy == expenseProvider.currentUserId;
 
-      if (!groupedActivities.containsKey(dateKey)) {
-        groupedActivities[dateKey] = [];
-      }
-      groupedActivities[dateKey]!.add({
+      (groupedActivities[dateKey] ??= []).add({
         'id': expenseId,
         'expense': expense,
         'title': expense.description,
@@ -449,137 +440,94 @@ class _HomeScreenState extends State<HomeScreen>
       });
     }
 
-    if (groupedActivities.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Text(
-            'No recent activities',
-            style: TextStyle(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-          ),
-        ),
-      );
-    }
-
     final sortedDates = groupedActivities.keys.toList()
       ..sort((a, b) {
         if (a == 'Today') return -1;
         if (b == 'Today') return 1;
         if (a == 'Yesterday') return -1;
         if (b == 'Yesterday') return 1;
+        // Newest first; parse back from 'MMM d, yyyy' for real ordering.
+        final da = DateFormat('MMM d, yyyy').tryParse(a);
+        final db = DateFormat('MMM d, yyyy').tryParse(b);
+        if (da != null && db != null) return db.compareTo(da);
         return b.compareTo(a);
       });
 
-    return ListView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      itemCount: sortedDates.length,
-      itemBuilder: (context, index) {
-        final date = sortedDates[index];
-        final items = groupedActivities[date]!;
-
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(8, 16, 8, 8),
-              child: Text(
-                date,
-                style: Theme.of(context).textTheme.bodyLarge!.copyWith(
-                      fontWeight: FontWeight.bold,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
+    final rows = <Widget>[];
+    for (final date in sortedDates) {
+      rows.add(Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 6),
+        child: Text(
+          date,
+          style: Theme.of(context).textTheme.titleSmall!.copyWith(
+                fontWeight: FontWeight.w700,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
+        ),
+      ));
+      for (final item in groupedActivities[date]!) {
+        rows.add(
+          Dismissible(
+            key: Key(item['id']),
+            direction: DismissDirection.endToStart,
+            background: Container(
+              margin:
+                  const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
+              decoration: BoxDecoration(
+                color:
+                    AppSemanticColors.negative(context).withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              alignment: Alignment.centerRight,
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Icon(Icons.delete_outline,
+                  color: AppSemanticColors.negative(context)),
             ),
-            ...items.map((item) {
-              return Dismissible(
-                key: Key(item['id']),
-                direction: DismissDirection.endToStart,
-                background: Container(
-                  color: Colors.redAccent,
-                  alignment: Alignment.centerRight,
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  child: const Icon(Icons.delete, color: Colors.white),
-                ),
-                confirmDismiss: (direction) async {
-                  return await showDialog<bool>(
-                    context: context,
-                    builder: (context) => AlertDialog(
-                      title: const Text('Remove Activity'),
-                      content: const Text(
-                          'Are you sure you want to remove this activity from recent activity?'),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.of(context).pop(false),
-                          child: const Text('Cancel'),
-                        ),
-                        TextButton(
-                          onPressed: () => Navigator.of(context).pop(true),
-                          child: const Text('Remove',
-                              style: TextStyle(color: Colors.red)),
-                        ),
-                      ],
-                    ),
-                  );
-                },
-                onDismissed: (direction) async {
-                  setState(() {
-                    _hiddenActivityIds.add(item['id']);
-                  });
-                  await _saveHiddenActivityIds();
-                  if (!context.mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                        content: Text('Removed from recent activity')),
-                  );
-                },
-                child: _buildActivityItem(
-                  context,
-                  item['expense'] as Expense,
-                  item['id'],
-                  item['title'],
-                  item['action'],
-                  item['amount'],
-                  item['icon'],
-                  () async {
-                    final confirmed = await showDialog<bool>(
-                      context: context,
-                      builder: (context) => AlertDialog(
-                        title: const Text('Remove Activity'),
-                        content: const Text(
-                            'Are you sure you want to remove this activity from recent activity?'),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.of(context).pop(false),
-                            child: const Text('Cancel'),
-                          ),
-                          TextButton(
-                            onPressed: () => Navigator.of(context).pop(true),
-                            child: const Text('Remove',
-                                style: TextStyle(color: Colors.red)),
-                          ),
-                        ],
-                      ),
-                    );
-                    if (confirmed == true) {
-                      setState(() {
-                        _hiddenActivityIds.add(item['id']);
-                      });
-                      await _saveHiddenActivityIds();
-                      if (!context.mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                            content: Text('Removed from recent activity')),
-                      );
-                    }
-                  },
-                ),
-              );
-            }),
-          ],
+            // Swipe removes directly — with Undo in the snack — instead of
+            // interrupting with a confirmation dialog.
+            onDismissed: (_) => _hideActivity(item['id'], title: item['title']),
+            child: _buildActivityItem(
+              context,
+              item['expense'] as Expense,
+              item['id'],
+              item['title'],
+              item['action'],
+              item['amount'],
+              item['icon'],
+            ),
+          ),
         );
-      },
+      }
+    }
+    return rows;
+  }
+
+  Widget _buildEmptyActivity(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(32, 48, 32, 64),
+      child: Column(
+        children: [
+          Icon(
+            Icons.receipt_long_outlined,
+            size: 56,
+            color: Theme.of(context).colorScheme.outline,
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'No recent activity',
+            style: Theme.of(context).textTheme.titleMedium,
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Expenses you add will show up here. Tap the + button to log your first one.',
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
     );
   }
 
@@ -587,6 +535,11 @@ class _HomeScreenState extends State<HomeScreen>
     final theme = Theme.of(context);
     final netBalance = _youGet - _youOwe;
     final currencyProvider = Provider.of<CurrencyProvider>(context);
+    final positive = netBalance >= 0;
+    final netColor = positive
+        ? AppSemanticColors.positive(context)
+        : AppSemanticColors.negative(context);
+
     return SlideTransition(
       position: Tween<Offset>(
         begin: const Offset(0, 0.1),
@@ -608,59 +561,71 @@ class _HomeScreenState extends State<HomeScreen>
             width: double.infinity,
             padding: const EdgeInsets.all(20.0),
             decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  theme.colorScheme.primaryContainer,
-                  theme.colorScheme.primary,
-                ],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(
-                  color: theme.colorScheme.shadow.withValues(alpha: 0.2),
-                  blurRadius: 10,
-                  offset: const Offset(0, 4),
-                ),
-              ],
+              // Flat, not a gradient: tints read noisy next to the lists and
+              // cost needless shader work on low-end devices.
+              color: theme.colorScheme.surface,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: theme.colorScheme.outlineVariant),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  'Total Balance',
-                  style: theme.textTheme.titleMedium!.copyWith(
-                    color: theme.colorScheme.onPrimary.withValues(alpha: 0.9),
-                  ),
+                Row(
+                  children: [
+                    Text(
+                      'Total Balance',
+                      style: theme.textTheme.titleMedium!.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const Spacer(),
+                    Icon(
+                      positive ? Icons.trending_up : Icons.trending_down,
+                      size: 20,
+                      color: netColor,
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 8),
-                Text(
-                  currencyProvider.format(netBalance),
-                  style: theme.textTheme.headlineMedium!.copyWith(
-                    fontWeight: FontWeight.bold,
-                    color: theme.colorScheme.onPrimary,
+                const SizedBox(height: 4),
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    currencyProvider.format(netBalance),
+                    style: theme.textTheme.headlineMedium!.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: netColor,
+                    ),
                   ),
                 ),
                 const SizedBox(height: 16),
-                Row(
-                  children: [
-                    _buildBalanceIndicator(
-                      context,
-                      'You Get',
-                      _youGet,
-                      Colors.greenAccent,
-                      Icons.arrow_upward,
-                    ),
-                    const SizedBox(width: 24),
-                    _buildBalanceIndicator(
-                      context,
-                      'You Owe',
-                      _youOwe,
-                      Colors.redAccent,
-                      Icons.arrow_downward,
-                    ),
-                  ],
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceContainerHighest
+                        .withValues(alpha: 0.6),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    children: [
+                      _buildBalanceIndicator(
+                        context,
+                        'You Get',
+                        _youGet,
+                        AppSemanticColors.positive(context),
+                        Icons.arrow_upward,
+                      ),
+                      const SizedBox(width: 24),
+                      _buildBalanceIndicator(
+                        context,
+                        'You Owe',
+                        _youOwe,
+                        AppSemanticColors.negative(context),
+                        Icons.arrow_downward,
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
@@ -672,34 +637,61 @@ class _HomeScreenState extends State<HomeScreen>
 
   @override
   Widget build(BuildContext context) {
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, result) async {
-        if (didPop) return;
-        final shouldExit = await _onWillPop();
-        if (shouldExit) {
-          exit(0);
-        }
-      },
-      child: Scaffold(
+    // First load only: show the spinner. Everything after that refreshes in
+    // place (no blank-screen flash when navigating back).
+    if (!_hasLoadedOnce) {
+      return const Scaffold(
         body: SafeArea(
-          child: _isLoading
-              ? const LoadingSpinner(
-                  initialMessage: 'Loading dashboard...',
-                  wakeUpMessage: 'Please wait as the backend wakes up...',
-                )
-              : RefreshIndicator(
-                  onRefresh: _fetchData,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const SizedBox(height: 16),
-                      _buildBalanceSection(context),
-                      const SizedBox(height: 24),
-                      _buildRecentActivities(context),
-                    ],
+          child: LoadingSpinner(
+            initialMessage: 'Loading dashboard...',
+            wakeUpMessage: 'Please wait as the backend wakes up...',
+          ),
+        ),
+      );
+    }
+
+    final activityRows = _buildActivityRows(context);
+
+    return Scaffold(
+      body: SafeArea(
+        top: false,
+        child: RefreshIndicator(
+          onRefresh: () => _fetchData(force: true),
+          child: CustomScrollView(
+            // Makes pull-to-refresh work even when content is short, and
+            // across the whole screen (the old non-scrollable Column broke it).
+            physics: const AlwaysScrollableScrollPhysics(),
+            slivers: [
+              const SliverToBoxAdapter(child: SizedBox(height: 16)),
+              SliverToBoxAdapter(child: _buildBalanceSection(context)),
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 24, 20, 8),
+                  child: Text(
+                    'Recent Activity',
+                    style: Theme.of(context).textTheme.titleLarge,
                   ),
                 ),
+              ),
+              if (_activeDraft != null)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                    child: _buildDraftBanner(context),
+                  ),
+                ),
+              if (activityRows.isEmpty)
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: _buildEmptyActivity(context),
+                )
+              else
+                SliverList(
+                  delegate: SliverChildListDelegate(activityRows),
+                ),
+              const SliverToBoxAdapter(child: SizedBox(height: 96)),
+            ],
+          ),
         ),
       ),
     );

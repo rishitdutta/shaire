@@ -1,4 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:uuid/uuid.dart';
 import '../services/logger_service.dart';
 
 class Payment {
@@ -34,7 +35,7 @@ class Payment {
       paymentId: json['payment_id'],
       fromUserId: json['from_user_id'],
       toUserId: json['to_user_id'],
-      amount: (json['amount'] as num).toDouble(),  // Ensure double conversion
+      amount: (json['amount'] as num).toDouble(), // Ensure double conversion
       currency: json['currency'],
       paymentMethod: json['payment_method'],
       paymentDate: DateTime.parse(json['payment_date']),
@@ -129,8 +130,41 @@ class PaymentService {
     }
   }
 
-  /// Create a payment record directly
-  Future<bool> createPaymentRecord({
+  /// Builds the `payments` row for a settlement.
+  ///
+  /// Separate from [createPaymentRecord] (and covered by
+  /// `test/settlement_payment_test.dart`) because every NOT NULL column of
+  /// `payments` has to be present: `payment_id` has no database default, and
+  /// a row without it dies with `23502 null value in column "payment_id"`,
+  /// which is exactly how settle-up used to fail in the field.
+  static Map<String, dynamic> buildSettlementRow({
+    required String fromUserId,
+    required String toUserId,
+    required double amount,
+    required String currency,
+    String paymentMethod = 'manual',
+    String? notes,
+    String? paymentId,
+  }) {
+    return {
+      'payment_id': paymentId ?? const Uuid().v4(),
+      'from_user_id': fromUserId,
+      'to_user_id': toUserId,
+      'amount': amount,
+      'currency': currency,
+      'payment_method': paymentMethod,
+      'payment_date': DateTime.now().toIso8601String(),
+      'status': 'completed',
+      'notes': notes,
+    };
+  }
+
+  /// Create a payment record directly.
+  ///
+  /// Throws on failure: a settle-up that silently no-ops is worse than an
+  /// error the user can see and retry (the old version logged and returned
+  /// false, and callers ignored the flag).
+  Future<void> createPaymentRecord({
     required String fromUserId,
     required String toUserId,
     required double amount,
@@ -138,22 +172,16 @@ class PaymentService {
     String paymentMethod = 'manual',
     String? notes,
   }) async {
-    try {
-      await supabase.from('payments').insert({
-        'from_user_id': fromUserId,
-        'to_user_id': toUserId,
-        'amount': amount,
-        'currency': currency,
-        'payment_method': paymentMethod,
-        'payment_date': DateTime.now().toIso8601String(),
-        'status': 'completed',
-        'notes': notes,
-      });
-      return true;
-    } catch (error) {
-      LoggerService.error('Error creating payment: $error');
-      return false;
-    }
+    await supabase.from('payments').insert(buildSettlementRow(
+          fromUserId: fromUserId,
+          toUserId: toUserId,
+          amount: amount,
+          currency: currency,
+          paymentMethod: paymentMethod,
+          notes: notes,
+        ));
+    LoggerService.info(
+        'Payment recorded: $fromUserId -> $toUserId ($amount $currency)');
   }
 
   /// Delete a payment by ID

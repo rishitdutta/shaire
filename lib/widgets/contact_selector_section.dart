@@ -152,7 +152,8 @@ class _ContactSelectorSectionState extends State<ContactSelectorSection> {
               child: ListView.separated(
                 shrinkWrap: true,
                 padding: const EdgeInsets.symmetric(vertical: 4),
-                itemCount: filteredContacts.length + 1, // +1 for "Add new friend"
+                itemCount:
+                    filteredContacts.length + 1, // +1 for "Add new friend"
                 separatorBuilder: (_, __) =>
                     Divider(height: 1, color: Theme.of(context).dividerColor),
                 itemBuilder: (context, index) {

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/currency_provider.dart';
+import '../theme/theme.dart';
 
 enum BillEntryType { item, tax, discount }
 
@@ -70,7 +71,8 @@ class ReceiptScannerSection extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(
                     color: Theme.of(context).colorScheme.primaryContainer,
                     borderRadius: BorderRadius.circular(12),
@@ -101,7 +103,8 @@ class ReceiptScannerSection extends StatelessWidget {
                 label: const Text('Add Charge'),
                 style: OutlinedButton.styleFrom(
                   visualDensity: VisualDensity.compact,
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                 ),
                 onPressed: onAddCharge,
               ),
@@ -111,7 +114,8 @@ class ReceiptScannerSection extends StatelessWidget {
                 label: const Text('Batch Assign'),
                 style: OutlinedButton.styleFrom(
                   visualDensity: VisualDensity.compact,
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                 ),
                 onPressed: onBatchAssign,
               ),
@@ -138,25 +142,34 @@ class ReceiptScannerSection extends StatelessWidget {
                       children: [
                         if (item.type == BillEntryType.discount)
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
                             margin: const EdgeInsets.only(right: 6),
                             decoration: BoxDecoration(
-                              color: Colors.green.withValues(alpha: 0.15),
+                              color: AppSemanticColors.positive(context)
+                                  .withValues(alpha: 0.15),
                               borderRadius: BorderRadius.circular(4),
                             ),
-                            child: const Text('Discount',
-                                style: TextStyle(color: Colors.green, fontSize: 11, fontWeight: FontWeight.bold)),
+                            child: Text('Discount',
+                                style: TextStyle(
+                                    color: AppSemanticColors.positive(context),
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold)),
                           )
                         else if (item.type == BillEntryType.tax)
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
                             margin: const EdgeInsets.only(right: 6),
                             decoration: BoxDecoration(
                               color: Colors.blue.withValues(alpha: 0.15),
                               borderRadius: BorderRadius.circular(4),
                             ),
                             child: const Text('Tax/Fee',
-                                style: TextStyle(color: Colors.blue, fontSize: 11, fontWeight: FontWeight.bold)),
+                                style: TextStyle(
+                                    color: Colors.blue,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold)),
                           ),
                         Expanded(
                           child: Text(
@@ -166,28 +179,35 @@ class ReceiptScannerSection extends StatelessWidget {
                         ),
                         Text(
                           '${item.type == BillEntryType.discount ? "-" : ""}${currencyProvider.format(item.amount)}',
-                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                color: item.type == BillEntryType.discount ? Colors.green : null,
-                                fontWeight: FontWeight.bold,
-                              ),
+                          style:
+                              Theme.of(context).textTheme.titleMedium?.copyWith(
+                                    color: item.type == BillEntryType.discount
+                                        ? AppSemanticColors.positive(context)
+                                        : null,
+                                    fontWeight: FontWeight.bold,
+                                  ),
                         ),
                       ],
                     ),
                     const SizedBox(height: 8),
                     Row(
                       children: [
-                        const Text('Assigned: ', style: TextStyle(fontSize: 13, color: Colors.grey)),
+                        const Text('Assigned: ',
+                            style: TextStyle(fontSize: 13, color: Colors.grey)),
                         Expanded(
                           child: Wrap(
                             spacing: 4,
                             runSpacing: 4,
                             children: [
                               if (item.assignedTo.isEmpty)
-                                const Chip(label: Text('No one'), visualDensity: VisualDensity.compact),
+                                const Chip(
+                                    label: Text('No one'),
+                                    visualDensity: VisualDensity.compact),
                               ...item.assignedTo.map((name) => Chip(
                                     label: Text(name),
                                     visualDensity: VisualDensity.compact,
-                                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                    materialTapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
                                   )),
                             ],
                           ),
@@ -199,7 +219,8 @@ class ReceiptScannerSection extends StatelessWidget {
                         ),
                         if (onDeleteItem != null)
                           IconButton(
-                            icon: const Icon(Icons.delete_outline, size: 20, color: Colors.redAccent),
+                            icon: const Icon(Icons.delete_outline,
+                                size: 20, color: Colors.redAccent),
                             tooltip: 'Remove',
                             onPressed: () => onDeleteItem!(index),
                           ),
@@ -409,7 +430,8 @@ class _AddCustomChargeDialogState extends State<AddCustomChargeDialog> {
                 spacing: 6,
                 children: _quickSuggestions.map((suggestion) {
                   return ActionChip(
-                    label: Text(suggestion, style: const TextStyle(fontSize: 11)),
+                    label:
+                        Text(suggestion, style: const TextStyle(fontSize: 11)),
                     visualDensity: VisualDensity.compact,
                     onPressed: () {
                       _descController.text = suggestion;
@@ -422,12 +444,14 @@ class _AddCustomChargeDialogState extends State<AddCustomChargeDialog> {
               // Amount
               TextFormField(
                 controller: _amountController,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
                 decoration: InputDecoration(
                   labelText: _selectedType == BillEntryType.discount
                       ? 'Discount Amount'
                       : 'Charge Amount',
-                  prefixText: _selectedType == BillEntryType.discount ? '- ' : '+ ',
+                  prefixText:
+                      _selectedType == BillEntryType.discount ? '- ' : '+ ',
                   isDense: true,
                 ),
                 validator: (val) {
@@ -460,13 +484,15 @@ class _AddCustomChargeDialogState extends State<AddCustomChargeDialog> {
                 child: const Column(
                   children: [
                     RadioListTile<bool>(
-                      title: Text('Split with everyone', style: TextStyle(fontSize: 13)),
+                      title: Text('Split with everyone',
+                          style: TextStyle(fontSize: 13)),
                       value: true,
                       contentPadding: EdgeInsets.zero,
                       dense: true,
                     ),
                     RadioListTile<bool>(
-                      title: Text('Select specific people', style: TextStyle(fontSize: 13)),
+                      title: Text('Select specific people',
+                          style: TextStyle(fontSize: 13)),
                       value: false,
                       contentPadding: EdgeInsets.zero,
                       dense: true,
@@ -514,7 +540,9 @@ class _AddCustomChargeDialogState extends State<AddCustomChargeDialog> {
             if (_formKey.currentState!.validate()) {
               if (_selectedAssignees.isEmpty) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Please select at least one person to assign')),
+                  const SnackBar(
+                      content:
+                          Text('Please select at least one person to assign')),
                 );
                 return;
               }

@@ -33,7 +33,8 @@ class QuickExpenseService {
       await _supabase.from('profiles').insert(profileData);
       return true;
     } catch (e) {
-      LoggerService.warning('Cannot create shadow profile for custom friend: $e');
+      LoggerService.warning(
+          'Cannot create shadow profile for custom friend: $e');
       return false;
     }
   }
@@ -75,17 +76,21 @@ class QuickExpenseService {
         description.trim().isNotEmpty ? description.trim() : 'Expense';
 
     // 1. Insert into `expenses`
-    final expenseRes = await _supabase.from('expenses').insert({
-      'description': effectiveDesc,
-      'total_amount': amount,
-      'currency': currencyCode,
-      'date': now.toIso8601String(),
-      'created_by': user.id,
-      'split_type': 'exact',
-      'category_id': 7, // Other
-      'created_at': now.toIso8601String(),
-      'updated_at': now.toIso8601String(),
-    }).select('id').single();
+    final expenseRes = await _supabase
+        .from('expenses')
+        .insert({
+          'description': effectiveDesc,
+          'total_amount': amount,
+          'currency': currencyCode,
+          'date': now.toIso8601String(),
+          'created_by': user.id,
+          'split_type': 'exact',
+          'category_id': 7, // Other
+          'created_at': now.toIso8601String(),
+          'updated_at': now.toIso8601String(),
+        })
+        .select('id')
+        .single();
 
     final int expenseId = expenseRes['id'] as int;
 
@@ -182,7 +187,8 @@ class QuickExpenseService {
       );
     }
 
-    LoggerService.info('Quick expense $expenseId created with $friendName ($amount)');
+    LoggerService.info(
+        'Quick expense $expenseId created with $friendName ($amount)');
     return true;
   }
 }

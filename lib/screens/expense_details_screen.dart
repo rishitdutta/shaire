@@ -10,6 +10,7 @@ import '../providers/user_provider.dart';
 import '../services/custom_friend_balance_service.dart';
 import '../services/logger_service.dart';
 import '../services/pdf_service.dart';
+import '../theme/theme.dart';
 import '../widgets/receipt_scanner_section.dart';
 
 class _ParticipantItem {
@@ -71,7 +72,8 @@ class _ExpenseDetailsScreenState extends State<ExpenseDetailsScreen> {
               .eq('expense_id', widget.expense.id);
 
           final parts = partsRes as List<dynamic>;
-          final userIds = parts.map((p) => p['user_id'] as String).toSet().toList();
+          final userIds =
+              parts.map((p) => p['user_id'] as String).toSet().toList();
 
           final Map<String, String> names = {};
           if (userIds.isNotEmpty) {
@@ -123,13 +125,15 @@ class _ExpenseDetailsScreenState extends State<ExpenseDetailsScreen> {
               // Prevent duplicate participant if already in list
               if (list.any((p) => p.id == cfId)) continue;
 
-              final expenses = await CustomFriendBalanceService.getExpenses(cfId);
+              final expenses =
+                  await CustomFriendBalanceService.getExpenses(cfId);
               final match = expenses.firstWhere(
                 (e) => (e['expense_id'] as num?)?.toInt() == widget.expense.id,
                 orElse: () => {},
               );
               if (match.isNotEmpty) {
-                final share = (match['friend_share'] as num?)?.toDouble() ?? 0.0;
+                final share =
+                    (match['friend_share'] as num?)?.toDouble() ?? 0.0;
                 final paidByYou = match['paid_by_you'] == true;
 
                 double paidAmount = 0.0;
@@ -167,9 +171,10 @@ class _ExpenseDetailsScreenState extends State<ExpenseDetailsScreen> {
             }
           }
         } catch (e) {
-          LoggerService.warning('Error fetching custom friend participants: $e');
+          LoggerService.warning(
+              'Error fetching custom friend participants: $e');
         }
-    }
+      }
 
       // Fallback if no participant rows recorded
       if (list.isEmpty) {
@@ -240,7 +245,8 @@ class _ExpenseDetailsScreenState extends State<ExpenseDetailsScreen> {
   Future<void> _downloadPdf() async {
     setState(() => _isDownloadingPdf = true);
     try {
-      final currencyProvider = Provider.of<CurrencyProvider>(context, listen: false);
+      final currencyProvider =
+          Provider.of<CurrencyProvider>(context, listen: false);
       final currentUserName = _getCurrentUserName();
       final payers = _participants.where((p) => p.paidAmount > 0.01).toList();
       String effectivePayerName;
@@ -267,10 +273,12 @@ class _ExpenseDetailsScreenState extends State<ExpenseDetailsScreen> {
       if (widget.expense.receiptImageUrl != null &&
           widget.expense.receiptImageUrl!.isNotEmpty) {
         try {
-          final res = await http.get(Uri.parse(widget.expense.receiptImageUrl!));
+          final res =
+              await http.get(Uri.parse(widget.expense.receiptImageUrl!));
           if (res.statusCode == 200) receiptBytes = res.bodyBytes;
         } catch (e) {
-          LoggerService.warning('Failed to load receipt image bytes for PDF: $e');
+          LoggerService.warning(
+              'Failed to load receipt image bytes for PDF: $e');
         }
       }
 
@@ -281,9 +289,8 @@ class _ExpenseDetailsScreenState extends State<ExpenseDetailsScreen> {
       }).toList();
 
       final participantShares = _participants.map((p) {
-        final displayName = p.isYou || p.name.toLowerCase() == 'you'
-            ? currentUserName
-            : p.name;
+        final displayName =
+            p.isYou || p.name.toLowerCase() == 'you' ? currentUserName : p.name;
         return {
           'name': displayName,
           'share': p.shareAmount,
@@ -321,7 +328,7 @@ class _ExpenseDetailsScreenState extends State<ExpenseDetailsScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Failed to generate PDF: $e'),
-            backgroundColor: Colors.red,
+            backgroundColor: AppSemanticColors.negativeFill,
           ),
         );
       }
@@ -452,11 +459,13 @@ class _ExpenseDetailsScreenState extends State<ExpenseDetailsScreen> {
                         ),
                         Chip(
                           avatar: const Icon(Icons.pie_chart_outline, size: 16),
-                          label: Text('${widget.expense.splitType.toUpperCase()} SPLIT'),
+                          label: Text(
+                              '${widget.expense.splitType.toUpperCase()} SPLIT'),
                           visualDensity: VisualDensity.compact,
                         ),
                         Chip(
-                          avatar: const Icon(Icons.person_pin_circle_outlined, size: 16),
+                          avatar: const Icon(Icons.person_pin_circle_outlined,
+                              size: 16),
                           label: Text('Paid by $_payerName'),
                           visualDensity: VisualDensity.compact,
                         ),
@@ -550,7 +559,8 @@ class _ExpenseDetailsScreenState extends State<ExpenseDetailsScreen> {
                                             padding: const EdgeInsets.symmetric(
                                                 horizontal: 6, vertical: 2),
                                             decoration: BoxDecoration(
-                                              color: colorScheme.primaryContainer,
+                                              color:
+                                                  colorScheme.primaryContainer,
                                               borderRadius:
                                                   BorderRadius.circular(4),
                                             ),
@@ -593,7 +603,8 @@ class _ExpenseDetailsScreenState extends State<ExpenseDetailsScreen> {
                                       isPayer
                                           ? 'Paid ${currencyProvider.format(p.paidAmount)} · Share: ${currencyProvider.format(p.shareAmount)}'
                                           : 'Share: ${currencyProvider.format(p.shareAmount)}',
-                                      style: theme.textTheme.bodySmall?.copyWith(
+                                      style:
+                                          theme.textTheme.bodySmall?.copyWith(
                                         color: colorScheme.onSurfaceVariant,
                                       ),
                                     ),

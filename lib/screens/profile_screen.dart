@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shaire/theme/theme.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../providers/currency_provider.dart';
 import '../providers/user_provider.dart';
+import '../services/data_cache.dart';
+import '../services/realtime_service.dart';
 import 'edit_profile_screen.dart';
 import 'edit_payment_info_screen.dart';
 
@@ -30,11 +33,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _refreshProfile() async {
-    setState(() {
-      // Use the provider method for refreshing
-      _userProfileFuture = Provider.of<UserProvider>(context, listen: false)
-          .refreshUserProfile();
-    });
+    // Use the provider method for refreshing; await so the refresh spinner
+    // stays until the data actually lands.
+    final future =
+        Provider.of<UserProvider>(context, listen: false).refreshUserProfile();
+    setState(() => _userProfileFuture = future);
+    try {
+      await future;
+    } catch (_) {
+      // Surfaced by the error widget in the FutureBuilder below.
+    }
   }
 
   @override
@@ -89,8 +97,105 @@ class _ProfileScreenState extends State<ProfileScreen> {
         _buildProfileInfo(userData),
         const SizedBox(height: 24),
         _buildPaymentInfo(context, userData),
+        const SizedBox(height: 24),
+        _buildPreferencesCard(context),
         const SizedBox(height: 40), // Add space at the bottom
       ],
+    );
+  }
+
+  Widget _buildPreferencesCard(BuildContext context) {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+              child: Text('Preferences',
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleLarge
+                      ?.copyWith(fontWeight: FontWeight.w600)),
+            ),
+            Consumer<ThemeNotifier>(
+              builder: (context, themeNotifier, child) {
+                final isDark = themeNotifier.themeMode == ThemeMode.dark ||
+                    (themeNotifier.themeMode == ThemeMode.system &&
+                        MediaQuery.platformBrightnessOf(context) ==
+                            Brightness.dark);
+                return SwitchListTile(
+                  secondary: const Icon(Icons.brightness_6_outlined),
+                  title: const Text('Dark theme'),
+                  subtitle: const Text('Easier on the eyes at night'),
+                  value: isDark,
+                  onChanged: (_) {
+                    HapticFeedback.selectionClick();
+                    themeNotifier.toggleTheme();
+                  },
+                );
+              },
+            ),
+            Consumer<CurrencyProvider>(
+              builder: (context, currencyProvider, child) {
+                return ListTile(
+                  leading: const Icon(Icons.currency_exchange),
+                  title: const Text('Currency'),
+                  subtitle: Text(
+                      'Amounts shown with ${currencyProvider.currencySymbol}'),
+                  trailing: const Icon(Icons.unfold_more, size: 20),
+                  onTap: () async {
+                    final selected = await showModalBottomSheet<String>(
+                      context: context,
+                      builder: (sheetContext) => SafeArea(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.all(16.0),
+                              child: Text('Display currency',
+                                  style: Theme.of(sheetContext)
+                                      .textTheme
+                                      .titleMedium),
+                            ),
+                            ...CurrencyProvider.availableCurrencies.entries
+                                .map((entry) {
+                              final isSelected = entry.value ==
+                                  currencyProvider.currencySymbol;
+                              return ListTile(
+                                title: Text('${entry.key} (${entry.value})'),
+                                trailing: isSelected
+                                    ? Icon(
+                                        Icons.check_circle,
+                                        color: Theme.of(sheetContext)
+                                            .colorScheme
+                                            .primary,
+                                      )
+                                    : null,
+                                selected: isSelected,
+                                onTap: () =>
+                                    Navigator.pop(sheetContext, entry.key),
+                              );
+                            }),
+                            const SizedBox(height: 8),
+                          ],
+                        ),
+                      ),
+                    );
+                    if (selected != null) {
+                      currencyProvider.setCurrency(selected);
+                    }
+                  },
+                );
+              },
+            ),
+            const SizedBox(height: 4),
+          ],
+        ),
+      ),
     );
   }
 
@@ -103,7 +208,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.error_outline, size: 60, color: Colors.red),
+            Icon(Icons.error_outline,
+                size: 60, color: AppSemanticColors.negative(context)),
             const SizedBox(height: 16),
             Text(
               'Error loading profile: $errorMsg',
@@ -269,6 +375,9 @@ class SettingsScreen extends StatelessWidget {
   Future<void> _signOut(BuildContext context) async {
     try {
       await Supabase.instance.client.auth.signOut();
+      // Never let the next account inherit this one's cached lists.
+      DataCache.instance.reset();
+      await RealtimeService.instance.stop();
       // Redirect to root route (SplashScreen) which will handle auth state properly
       if (context.mounted) {
         Navigator.pushNamedAndRemoveUntil(context, '/', (route) => false);
@@ -337,26 +446,34 @@ class SettingsScreen extends StatelessWidget {
             },
           ),
           ListTile(
-            leading: const Icon(Icons.exit_to_app),
+            leading: const Icon(Icons.logout),
             title: const Text('Sign Out'),
+            iconColor: Theme.of(context).colorScheme.error,
+            textColor: Theme.of(context).colorScheme.error,
             onTap: () {
+              final rootContext = context;
               showDialog(
                 context: context,
-                builder: (BuildContext context) {
+                builder: (BuildContext dialogContext) {
                   return AlertDialog(
                     title: const Text('Sign Out'),
                     content: const Text('Are you sure you want to sign out?'),
                     actions: <Widget>[
                       TextButton(
                         child: const Text('Cancel'),
-                        onPressed: () {
-                          Navigator.of(context).pop();
-                        },
+                        onPressed: () => Navigator.of(dialogContext).pop(),
                       ),
                       TextButton(
+                        style: TextButton.styleFrom(
+                          foregroundColor:
+                              Theme.of(dialogContext).colorScheme.error,
+                        ),
                         child: const Text('Sign Out'),
                         onPressed: () {
-                          _signOut(context);
+                          // Close the dialog first, then navigate from the
+                          // settings screen's context.
+                          Navigator.of(dialogContext).pop();
+                          _signOut(rootContext);
                         },
                       ),
                     ],
@@ -368,48 +485,5 @@ class SettingsScreen extends StatelessWidget {
         ],
       ),
     );
-  }
-}
-
-Future<Map<String, dynamic>> fetchUserProfile() async {
-  final user = Supabase.instance.client.auth.currentUser;
-
-  if (user == null) {
-    throw Exception('No user is logged in');
-  }
-
-  try {
-    final response = await Supabase.instance.client
-        .from('profiles')
-        .select()
-        .eq('id', user.id)
-        .single();
-
-    return response;
-  } catch (error) {
-    if (error is PostgrestException) {
-      throw Exception(error.message);
-    } else {
-      throw Exception('Unexpected error occurred');
-    }
-  }
-}
-
-Future<void> updateUserProfile(Map<String, dynamic> updates) async {
-  final user = Supabase.instance.client.auth.currentUser;
-
-  if (user == null) {
-    throw Exception('No user is logged in');
-  }
-
-  updates['updated_at'] = DateTime.now().toIso8601String();
-
-  final response = await Supabase.instance.client
-      .from('profiles')
-      .update(updates)
-      .eq('id', user.id);
-
-  if (response.error != null) {
-    throw Exception(response.error!.message);
   }
 }

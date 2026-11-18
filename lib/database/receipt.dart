@@ -118,9 +118,7 @@ class ReceiptService {
       final storagePath = 'receipts/$fileName';
 
       // 3. Upload to Supabase Storage
-      final response = await supabase.storage
-          .from('receipts')
-          .upload(
+      final response = await supabase.storage.from('receipts').upload(
             storagePath,
             compressedFile,
             fileOptions: const FileOptions(
@@ -132,9 +130,8 @@ class ReceiptService {
       LoggerService.debug('Receipt uploaded: $response');
 
       // 4. Get the public URL for the uploaded image
-      final publicUrl = supabase.storage
-          .from('receipts')
-          .getPublicUrl(storagePath);
+      final publicUrl =
+          supabase.storage.from('receipts').getPublicUrl(storagePath);
 
       LoggerService.debug('Public URL: $publicUrl');
 
@@ -148,16 +145,12 @@ class ReceiptService {
         'user_id': userId,
       };
 
-      final insertResponse = await supabase
-          .from('receipts')
-          .insert(receiptData)
-          .select()
-          .single();
+      final insertResponse =
+          await supabase.from('receipts').insert(receiptData).select().single();
 
       LoggerService.debug('Receipt DB insert: $insertResponse');
 
       return Receipt.fromJson(insertResponse);
-
     } on StorageException catch (e) {
       LoggerService.error('Storage error during upload', e);
 

@@ -10,6 +10,8 @@ import '../providers/expense_provider.dart';
 import 'package:intl/intl.dart';
 import 'package:shaire/services/logger_service.dart';
 import '../services/expense_draft_service.dart';
+import '../theme/theme.dart';
+import 'home_screen.dart' show routeObserver;
 import 'add_expense_screen.dart';
 import 'expense_details_screen.dart';
 
@@ -20,8 +22,9 @@ class ExpensesScreen extends StatefulWidget {
   State<ExpensesScreen> createState() => _ExpensesScreenState();
 }
 
-class _ExpensesScreenState extends State<ExpensesScreen> {
+class _ExpensesScreenState extends State<ExpensesScreen> with RouteAware {
   bool _isLoading = true;
+  bool _hasLoadedOnce = false;
   double _expenseChangePercent = 0;
   List<List<double>> _weeklyExpensesData = [];
   List<String> _weekLabels = [];
@@ -40,6 +43,26 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
 
     // Load cached data and drafts first, then fetch if needed
     _loadDataAndFetch();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    routeObserver.subscribe(this, ModalRoute.of(context)! as PageRoute);
+  }
+
+  @override
+  void dispose() {
+    routeObserver.unsubscribe(this);
+    super.dispose();
+  }
+
+  /// Come back into view (new expense added, details popped) — refresh
+  /// silently in place instead of showing a full-screen loader.
+  @override
+  void didPopNext() {
+    super.didPopNext();
+    _fetchExpenses();
   }
 
   Future<void> _checkDraft() async {
@@ -66,7 +89,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   }
 
   Future<void> _fetchExpenses() async {
-    setState(() => _isLoading = true);
+    if (!_hasLoadedOnce) setState(() => _isLoading = true);
 
     try {
       final expenseProvider =
@@ -77,7 +100,10 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
 
       if (!mounted) return;
       _processExpensesData(expenseProvider.expenses);
-      setState(() => _isLoading = false);
+      setState(() {
+        _isLoading = false;
+        _hasLoadedOnce = true;
+      });
 
       // Fetch predictions in the background without blocking the expenses UI
       if (predictionProvider.needsRefresh) {
@@ -87,7 +113,10 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       LoggerService.error(
           'Error fetching expenses or processing predictions', e);
       if (mounted) {
-        setState(() => _isLoading = false);
+        setState(() {
+          _isLoading = false;
+          _hasLoadedOnce = true;
+        });
       }
     }
   }
@@ -99,7 +128,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
           Provider.of<ExpenseProvider>(context, listen: false);
       final predictionProvider =
           Provider.of<PredictionProvider>(context, listen: false);
-      await expenseProvider.fetchExpenses();
+      await expenseProvider.fetchExpenses(force: true);
 
       await predictionProvider.fetchPredictions(expenseProvider.expenses,
           forceRefresh: true);
@@ -274,13 +303,48 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     }
 
     if (predictionProvider.hasError) {
+      // An error card with no way out is a dead end — give it a retry.
       return Card(
         elevation: 2,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: Padding(
           padding: const EdgeInsets.all(16.0),
-          child: Text(
-              'Failed to load predictions: ${predictionProvider.errorMessage}'),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.error_outline,
+                      size: 20, color: Theme.of(context).colorScheme.error),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text('AI forecast unavailable',
+                        style: Theme.of(context).textTheme.titleMedium),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                predictionProvider.errorMessage,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerRight,
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    final expenses =
+                        Provider.of<ExpenseProvider>(context, listen: false)
+                            .expenses;
+                    predictionProvider.fetchPredictions(expenses,
+                        forceRefresh: true);
+                  },
+                  icon: const Icon(Icons.refresh, size: 18),
+                  label: const Text('Try again'),
+                ),
+              ),
+            ],
+          ),
         ),
       );
     }
@@ -415,16 +479,6 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                       );
                     }).toList(),
                   ),
-            // Show the "See More" button if there are more than 7 days of predictions
-            if (futurePredictions.length > 7)
-              Center(
-                child: TextButton(
-                  onPressed: () {
-                    // TODO: Navigate to detailed predictions page
-                  },
-                  child: const Text('See More'),
-                ),
-              ),
           ],
         ),
       ),
@@ -505,14 +559,18 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     }
 
     return Scaffold(
-      body: _isLoading
+      // Only block on the very first load; subsequent refreshes update the
+      // cards in place so the screen never flashes to a spinner.
+      body: _isLoading && !_hasLoadedOnce
           ? const LoadingSpinner(
               initialMessage: 'Loading expenses & analytics...',
               wakeUpMessage: 'Please wait as the backend wakes up...',
             )
           : RefreshIndicator(
-              onRefresh: _refreshWithForcedUpdate, // Use new refresh method
+              onRefresh: _refreshWithForcedUpdate,
               child: SingleChildScrollView(
+                // Allows the refresh gesture even if content is short.
+                physics: const AlwaysScrollableScrollPhysics(),
                 child: Padding(
                   padding: const EdgeInsets.all(16.0),
                   child: Column(
@@ -528,8 +586,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                         currencyProvider: currencyProvider,
                       ),
                       const SizedBox(height: 24),
-                      _buildPredictions(
-                          context, currencyProvider),
+                      _buildPredictions(context, currencyProvider),
                       const SizedBox(height: 24),
                       CategoryBreakdownList(
                         categories: _cachedCategories,
@@ -559,20 +616,9 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  'Recent Expenses',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                TextButton(
-                  onPressed: () {
-                    // Navigate to detailed expense history
-                  },
-                  child: const Text('See All'),
-                ),
-              ],
+            Text(
+              'Recent Expenses',
+              style: Theme.of(context).textTheme.titleLarge,
             ),
             const SizedBox(height: 8),
             if (_activeDraft != null) ...[
@@ -697,7 +743,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                       child: const Text('Cancel'),
                     ),
                     TextButton(
-                      style: TextButton.styleFrom(foregroundColor: Colors.red),
+                      style: TextButton.styleFrom(
+                          foregroundColor: AppSemanticColors.negative(context)),
                       onPressed: () => Navigator.pop(ctx, true),
                       child: const Text('Discard'),
                     ),
@@ -747,7 +794,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
             _buildInsightTile(
               context,
               _getCategoryIcon(_highestCategory),
-              '$_highestCategory is your highest expense category this month.',
+              '$_highestCategory is your biggest expense category overall.',
               'Consider setting a budget for this category.',
             ),
             Divider(color: Theme.of(context).dividerColor),
@@ -851,14 +898,18 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                   children: [
                     Icon(
                       isPositive ? Icons.arrow_upward : Icons.arrow_downward,
-                      color: isPositive ? Colors.red : Colors.green,
+                      color: isPositive
+                          ? AppSemanticColors.negative(context)
+                          : AppSemanticColors.positive(context),
                       size: 16,
                     ),
                     const SizedBox(width: 4),
                     Text(
                       changeText,
                       style: TextStyle(
-                        color: isPositive ? Colors.red : Colors.green,
+                        color: isPositive
+                            ? AppSemanticColors.negative(context)
+                            : AppSemanticColors.positive(context),
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -868,7 +919,9 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
             ),
             Icon(
               isPositive ? Icons.trending_up : Icons.trending_down,
-              color: isPositive ? Colors.red : Colors.green,
+              color: isPositive
+                  ? AppSemanticColors.negative(context)
+                  : AppSemanticColors.positive(context),
               size: 36,
             ),
           ],
@@ -947,9 +1000,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
             ),
             Text(
               currencyProvider.format(amount),
-              style: TextStyle(
+              style: const TextStyle(
                 fontWeight: FontWeight.bold,
-                color: Theme.of(context).colorScheme.error,
               ),
             ),
           ],

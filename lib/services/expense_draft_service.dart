@@ -105,21 +105,18 @@ class ExpenseDraft {
       individualPercents: (json['individualPercents'] as Map?)
               ?.map((k, v) => MapEntry(k.toString(), v.toString())) ??
           {},
-      billEntries: (json['billEntries'] as List?)
-              ?.map((e) {
-                final map = Map<String, dynamic>.from(e as Map);
-                return BillEntry(
-                  description: map['description'] as String? ?? '',
-                  amount: (map['amount'] as num?)?.toDouble() ?? 0.0,
-                  assignedTo:
-                      List<String>.from(map['assignedTo'] as List? ?? []),
-                  type: BillEntryType.values.firstWhere(
-                    (t) => t.name == map['type'],
-                    orElse: () => BillEntryType.item,
-                  ),
-                );
-              })
-              .toList() ??
+      billEntries: (json['billEntries'] as List?)?.map((e) {
+            final map = Map<String, dynamic>.from(e as Map);
+            return BillEntry(
+              description: map['description'] as String? ?? '',
+              amount: (map['amount'] as num?)?.toDouble() ?? 0.0,
+              assignedTo: List<String>.from(map['assignedTo'] as List? ?? []),
+              type: BillEntryType.values.firstWhere(
+                (t) => t.name == map['type'],
+                orElse: () => BillEntryType.item,
+              ),
+            );
+          }).toList() ??
           [],
       receiptImagePath: json['receiptImagePath'] as String?,
       currentReceiptId: json['currentReceiptId'] as int?,

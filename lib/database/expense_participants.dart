@@ -45,7 +45,8 @@ class ExpenseParticipantService {
   final SupabaseClient supabase = Supabase.instance.client;
 
   /// Fetch an expense participant by expense ID and user ID
-  Future<ExpenseParticipant?> fetchExpenseParticipant(int expenseId, String userId) async {
+  Future<ExpenseParticipant?> fetchExpenseParticipant(
+      int expenseId, String userId) async {
     try {
       final response = await supabase
           .from('expense_participants')

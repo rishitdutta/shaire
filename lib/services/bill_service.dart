@@ -60,7 +60,8 @@ Ensure the JSON is valid and can be parsed by a computer.
     // 1. Try direct Google Gemini API call first for minimal latency
     if (_apiKey.isNotEmpty) {
       try {
-        LoggerService.info('Extracting bill via direct Gemini API ($_geminiModel)...');
+        LoggerService.info(
+            'Extracting bill via direct Gemini API ($_geminiModel)...');
         final bytes = await imageFile.readAsBytes();
         final base64Image = base64Encode(bytes);
 
@@ -106,7 +107,8 @@ Ensure the JSON is valid and can be parsed by a computer.
                 final cleaned = _cleanJsonString(rawText);
                 final parsed = jsonDecode(cleaned);
                 if (parsed is Map<String, dynamic>) {
-                  LoggerService.info('Gemini direct OCR successful: ${parsed['merchant_name']}');
+                  LoggerService.info(
+                      'Gemini direct OCR successful: ${parsed['merchant_name']}');
                   return parsed;
                 }
               }
@@ -128,18 +130,21 @@ Ensure the JSON is valid and can be parsed by a computer.
 
   Future<Map<String, dynamic>> _extractBillInfoBackend(File imageFile) async {
     try {
-      LoggerService.info('Extracting bill via backend fallback: $_fallbackBaseUrl');
-      final request =
-          http.MultipartRequest('POST', Uri.parse('$_fallbackBaseUrl/extract_bill'));
+      LoggerService.info(
+          'Extracting bill via backend fallback: $_fallbackBaseUrl');
+      final request = http.MultipartRequest(
+          'POST', Uri.parse('$_fallbackBaseUrl/extract_bill'));
 
       request.files.add(await http.MultipartFile.fromPath(
         'image',
         imageFile.path,
       ));
 
-      final response = await request.send().timeout(const Duration(seconds: 60));
-      final responseData =
-          await response.stream.bytesToString().timeout(const Duration(seconds: 30));
+      final response =
+          await request.send().timeout(const Duration(seconds: 60));
+      final responseData = await response.stream
+          .bytesToString()
+          .timeout(const Duration(seconds: 30));
 
       if (response.statusCode == 200) {
         final decoded = json.decode(responseData);
@@ -148,7 +153,8 @@ Ensure the JSON is valid and can be parsed by a computer.
         }
         return decoded is Map<String, dynamic> ? decoded : <String, dynamic>{};
       } else {
-        String errorMsg = 'Failed to extract bill info (HTTP ${response.statusCode})';
+        String errorMsg =
+            'Failed to extract bill info (HTTP ${response.statusCode})';
         try {
           final errorJson = json.decode(responseData);
           if (errorJson is Map && errorJson.containsKey('detail')) {

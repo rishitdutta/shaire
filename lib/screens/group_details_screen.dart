@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../providers/currency_provider.dart';
 import '../providers/group_provider.dart';
 import '../widgets/loading_spinner.dart';
+import '../theme/theme.dart';
 import 'add_expense_screen.dart';
 
 class GroupDetailsScreen extends StatefulWidget {
@@ -64,8 +65,7 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen>
   Future<void> _loadAll() async {
     setState(() => _loading = true);
     try {
-      final groupProvider =
-          Provider.of<GroupProvider>(context, listen: false);
+      final groupProvider = Provider.of<GroupProvider>(context, listen: false);
       final details = await groupProvider.fetchGroupDetails(widget.groupId);
 
       if (!mounted) return;
@@ -76,8 +76,8 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen>
         _members.clear();
         _members.addAll(List<Map<String, dynamic>>.from(details['members']));
         _activities.clear();
-        _activities.addAll(
-            List<Map<String, dynamic>>.from(details['activities']));
+        _activities
+            .addAll(List<Map<String, dynamic>>.from(details['activities']));
         _memberBalances.clear();
         _memberBalances.addAll(
             Map<String, Map<String, double>>.from(details['memberBalances']));
@@ -193,7 +193,7 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen>
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
+              backgroundColor: AppSemanticColors.negativeFill,
               foregroundColor: Colors.white,
             ),
             onPressed: () => Navigator.pop(ctx, true),
@@ -284,13 +284,16 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen>
                     ],
                   ),
                 ),
-                const PopupMenuItem<String>(
+                PopupMenuItem<String>(
                   value: 'delete',
                   child: Row(
                     children: [
-                      Icon(Icons.delete_forever, color: Colors.red),
-                      SizedBox(width: 8),
-                      Text('Delete Group', style: TextStyle(color: Colors.red)),
+                      Icon(Icons.delete_forever,
+                          color: AppSemanticColors.negative(context)),
+                      const SizedBox(width: 8),
+                      Text('Delete Group',
+                          style: TextStyle(
+                              color: AppSemanticColors.negative(context))),
                     ],
                   ),
                 ),
@@ -403,10 +406,16 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen>
                           final isAdmin = m['role'] == 'admin';
 
                           final memberId = m['user_id'] as String;
-                          final balances = _memberBalances[memberId] ?? {'youOwe': 0.0, 'youAreOwed': 0.0};
-                          final double youOwe = isCurrentUser ? 0.0 : (balances['youOwe'] ?? 0.0);
-                          final double youAreOwed = isCurrentUser ? 0.0 : (balances['youAreOwed'] ?? 0.0);
-                          final currencyProvider = Provider.of<CurrencyProvider>(context, listen: false);
+                          final balances = _memberBalances[memberId] ??
+                              {'youOwe': 0.0, 'youAreOwed': 0.0};
+                          final double youOwe =
+                              isCurrentUser ? 0.0 : (balances['youOwe'] ?? 0.0);
+                          final double youAreOwed = isCurrentUser
+                              ? 0.0
+                              : (balances['youAreOwed'] ?? 0.0);
+                          final currencyProvider =
+                              Provider.of<CurrencyProvider>(context,
+                                  listen: false);
 
                           return Card(
                             margin: const EdgeInsets.symmetric(
@@ -497,11 +506,14 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen>
                                               visualDensity:
                                                   VisualDensity.compact,
                                               backgroundColor:
-                                                  Colors.red.shade50,
+                                                  AppSemanticColors.negative(
+                                                          context)
+                                                      .withValues(alpha: 0.12),
                                               label: Text(
                                                 'You owe: ${currencyProvider.format(youOwe)}',
-                                                style: const TextStyle(
-                                                  color: Colors.red,
+                                                style: TextStyle(
+                                                  color: AppSemanticColors
+                                                      .negative(context),
                                                   fontWeight: FontWeight.w500,
                                                   fontSize: 12,
                                                 ),
@@ -517,11 +529,14 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen>
                                               visualDensity:
                                                   VisualDensity.compact,
                                               backgroundColor:
-                                                  Colors.green.shade50,
+                                                  AppSemanticColors.positive(
+                                                          context)
+                                                      .withValues(alpha: 0.12),
                                               label: Text(
                                                 'Owes you: ${currencyProvider.format(youAreOwed)}',
-                                                style: const TextStyle(
-                                                  color: Colors.green,
+                                                style: TextStyle(
+                                                  color: AppSemanticColors
+                                                      .positive(context),
                                                   fontWeight: FontWeight.w500,
                                                   fontSize: 12,
                                                 ),
@@ -534,12 +549,13 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen>
                                                       .shrinkWrap,
                                               visualDensity:
                                                   VisualDensity.compact,
-                                              backgroundColor:
-                                                  Colors.grey.shade100,
-                                              label: const Text(
+                                              backgroundColor: colorScheme
+                                                  .surfaceContainerHighest,
+                                              label: Text(
                                                 'Settled up',
                                                 style: TextStyle(
-                                                  color: Colors.grey,
+                                                  color: colorScheme
+                                                      .onSurfaceVariant,
                                                   fontWeight: FontWeight.w500,
                                                   fontSize: 12,
                                                 ),
@@ -566,13 +582,13 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen>
                             Icon(
                               Icons.receipt_long,
                               size: 64,
-                              color: Colors.grey.shade400,
+                              color: colorScheme.outline,
                             ),
                             const SizedBox(height: 16),
                             Text(
                               'No expenses yet',
                               style: theme.textTheme.titleMedium?.copyWith(
-                                color: Colors.grey.shade600,
+                                color: colorScheme.onSurfaceVariant,
                               ),
                             ),
                             const SizedBox(height: 8),

@@ -1,6 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../services/data_cache.dart';
 import '../services/logger_service.dart';
+import '../services/realtime_service.dart';
 
 class GroupProvider with ChangeNotifier {
   final SupabaseClient _supabase = Supabase.instance.client;
@@ -16,7 +20,19 @@ class GroupProvider with ChangeNotifier {
 
   String? get currentUserId => _supabase.auth.currentUser?.id;
 
-  Future<void> fetchGroups() async {
+  static const String _cacheKey = 'groups';
+
+  /// Cached list load — `force` only after real mutations/pull-to-refresh.
+  Future<void> fetchGroups({bool force = false}) async {
+    await DataCache.instance.fetch(
+      _cacheKey,
+      ttl: const Duration(seconds: 45),
+      force: force,
+      fetch: _fetchGroupsFromNetwork,
+    );
+  }
+
+  Future<void> _fetchGroupsFromNetwork() async {
     if (currentUserId == null) return;
 
     _isLoading = true;
@@ -102,9 +118,10 @@ class GroupProvider with ChangeNotifier {
         'user_id': currentUserId!,
         'role': 'admin',
       });
-      LoggerService.info("Added creator $currentUserId as admin to $newGroupId");
+      LoggerService.info(
+          "Added creator $currentUserId as admin to $newGroupId");
 
-      await fetchGroups();
+      await fetchGroups(force: true);
       return newGroupId;
     } catch (e, st) {
       LoggerService.error("Failed to create group", e, st);
@@ -138,13 +155,14 @@ class GroupProvider with ChangeNotifier {
               })
           .toList();
 
-      LoggerService.debug('Adding ${membersToAdd.length} members to group $groupId');
+      LoggerService.debug(
+          'Adding ${membersToAdd.length} members to group $groupId');
 
       // Insert into group_members table
       await _supabase.from('group_members').insert(membersToAdd);
       LoggerService.info('Successfully added members to group $groupId');
 
-      await fetchGroups(); // Refresh the groups data
+      await fetchGroups(force: true); // Refresh the groups data
     } catch (e) {
       _error = e.toString();
       LoggerService.error('Error adding members: $_error', e);
@@ -196,7 +214,7 @@ class GroupProvider with ChangeNotifier {
       });
 
       LoggerService.info('Successfully joined group with ID: $groupId');
-      await fetchGroups();
+      await fetchGroups(force: true);
     } catch (e) {
       _error = e.toString();
       LoggerService.error('Error joining group: $_error', e);
@@ -243,15 +261,10 @@ class GroupProvider with ChangeNotifier {
     }
 
     // 3. Fetch expenses
-    final expensesRes = await _supabase
-        .from('expenses')
-        .select('''
+    final expensesRes = await _supabase.from('expenses').select('''
         id, description, total_amount, date, created_at,
         creator:created_by(username, full_name)
-      ''')
-        .eq('group_id', groupId)
-        .order('date', ascending: false)
-        .limit(20);
+      ''').eq('group_id', groupId).order('date', ascending: false).limit(20);
 
     final List<Map<String, dynamic>> activities = [];
     for (final e in expensesRes) {
@@ -296,12 +309,15 @@ class GroupProvider with ChangeNotifier {
           if (totalExpAmount <= 0) continue;
 
           final myPart = parts.where((p) => p['user_id'] == userId).firstOrNull;
-          final memberPart = parts.where((p) => p['user_id'] == memberId).firstOrNull;
+          final memberPart =
+              parts.where((p) => p['user_id'] == memberId).firstOrNull;
 
           if (myPart != null && memberPart != null) {
             final myPaid = (myPart['paid_amount'] as num? ?? 0).toDouble();
-            final memberShare = (memberPart['share_amount'] as num? ?? 0).toDouble();
-            final memberPaid = (memberPart['paid_amount'] as num? ?? 0).toDouble();
+            final memberShare =
+                (memberPart['share_amount'] as num? ?? 0).toDouble();
+            final memberPaid =
+                (memberPart['paid_amount'] as num? ?? 0).toDouble();
             final myShare = (myPart['share_amount'] as num? ?? 0).toDouble();
 
             if (myPaid > 0 && memberShare > 0) {
@@ -338,7 +354,7 @@ class GroupProvider with ChangeNotifier {
       'name': newName.trim(),
     }).eq('id', groupId);
     LoggerService.info('Updated group $groupId name to $newName');
-    await fetchGroups();
+    await fetchGroups(force: true);
   }
 
   Future<void> deleteGroup(int groupId) async {
@@ -346,5 +362,23 @@ class GroupProvider with ChangeNotifier {
     LoggerService.info('Deleted group $groupId');
     _groups.removeWhere((g) => g['id'] == groupId);
     notifyListeners();
+  }
+
+  // ── Realtime invalidation ────────────────────────────────────────────────
+
+  StreamSubscription<String>? _realtimeSub;
+
+  GroupProvider() {
+    _realtimeSub = RealtimeService.instance.changes.listen((table) {
+      if (const {'groups', 'group_members', 'expenses'}.contains(table)) {
+        fetchGroups(force: true);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _realtimeSub?.cancel();
+    super.dispose();
   }
 }

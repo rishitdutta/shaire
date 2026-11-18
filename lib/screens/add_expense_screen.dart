@@ -1,31 +1,32 @@
+import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:intl/intl.dart';
-import 'dart:io';
+import 'package:flutter_image_compress/flutter_image_compress.dart';
+import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
+import 'package:intl/intl.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:provider/provider.dart';
 import 'package:shaire/database/expense.dart';
 import 'package:shaire/providers/expense_provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import '../services/bill_service.dart';
-import '../services/logger_service.dart';
-import '../providers/currency_provider.dart';
-import '../database/receipt.dart';
 import '../database/balance.dart';
-import 'package:provider/provider.dart';
-import '../providers/user_provider.dart';
-import 'package:image/image.dart' as img;
+import '../database/receipt.dart';
+import '../providers/currency_provider.dart';
 import '../providers/friend_provider.dart';
 import '../providers/group_provider.dart';
-import '../widgets/split_options_widget.dart';
-import '../widgets/contact_selector_section.dart';
-import 'dart:async';
-import '../widgets/receipt_scanner_section.dart';
-import '../widgets/loading_spinner.dart';
-import '../services/pdf_service.dart';
-import '../services/expense_draft_service.dart';
+import '../providers/user_provider.dart';
+import '../services/bill_service.dart';
 import '../services/custom_friend_balance_service.dart';
-import 'package:flutter_image_compress/flutter_image_compress.dart';
-import 'package:path_provider/path_provider.dart';
+import '../services/expense_draft_service.dart';
+import '../services/logger_service.dart';
+import '../services/pdf_service.dart';
+import '../theme/theme.dart';
+import '../widgets/contact_selector_section.dart';
+import '../widgets/loading_spinner.dart';
+import '../widgets/receipt_scanner_section.dart';
+import '../widgets/split_options_widget.dart';
 
 class AddExpenseScreen extends StatefulWidget {
   final int? groupId;
@@ -91,6 +92,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
 
   // Loading state
   bool _isLoading = false;
+  bool _isSaving = false;
   String _loadingMessage = 'Saving expense & updating balances...';
 
   // Services
@@ -108,7 +110,8 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive) {
       _saveCurrentDraft();
     }
   }
@@ -128,7 +131,9 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
     if (amt > 0) return true;
     if (_billEntries.isNotEmpty) return true;
     if (_receiptImageFile != null) return true;
-    if (_isMultiplePayers && _payerAmounts.values.any((v) => v > 0)) return true;
+    if (_isMultiplePayers && _payerAmounts.values.any((v) => v > 0)) {
+      return true;
+    }
 
     final int prefilledCount =
         (widget.groupId != null ? 1 : 0) + (widget.friendId != null ? 1 : 0);
@@ -296,7 +301,8 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
             child: const Text('Keep Editing'),
           ),
           TextButton(
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            style: TextButton.styleFrom(
+                foregroundColor: AppSemanticColors.negative(context)),
             onPressed: () => Navigator.of(ctx).pop(true),
             child: const Text('Discard'),
           ),
@@ -309,9 +315,8 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
     if (!_isMultiplePayers) {
       return _payerName;
     }
-    final payersWithAmount = _payerAmounts.entries
-        .where((e) => e.value > 0.01)
-        .toList();
+    final payersWithAmount =
+        _payerAmounts.entries.where((e) => e.value > 0.01).toList();
     if (payersWithAmount.isEmpty) {
       return 'Multiple people';
     } else if (payersWithAmount.length == 1) {
@@ -486,10 +491,11 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
                                     fontWeight: FontWeight.bold,
                                     fontSize: 13,
                                     color: isBalanced
-                                        ? Colors.green
+                                        ? AppSemanticColors.positive(context)
                                         : (diff > 0.01
                                             ? Colors.orange
-                                            : Colors.red),
+                                            : AppSemanticColors.negative(
+                                                context)),
                                   ),
                                 ),
                               ],
@@ -503,10 +509,14 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
                                       horizontal: 8, vertical: 3),
                                   decoration: BoxDecoration(
                                     color: isBalanced
-                                        ? Colors.green.withValues(alpha: 0.15)
+                                        ? AppSemanticColors.positive(context)
+                                            .withValues(alpha: 0.15)
                                         : (diff > 0.01
-                                            ? Colors.orange.withValues(alpha: 0.15)
-                                            : Colors.red.withValues(alpha: 0.15)),
+                                            ? Colors.orange
+                                                .withValues(alpha: 0.15)
+                                            : AppSemanticColors.negative(
+                                                    context)
+                                                .withValues(alpha: 0.15)),
                                     borderRadius: BorderRadius.circular(6),
                                   ),
                                   child: Text(
@@ -521,10 +531,11 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
                                       fontSize: 11,
                                       fontWeight: FontWeight.bold,
                                       color: isBalanced
-                                          ? Colors.green
+                                          ? AppSemanticColors.positive(context)
                                           : (diff > 0.01
                                               ? Colors.orange.shade800
-                                              : Colors.red),
+                                              : AppSemanticColors.negative(
+                                                  context)),
                                     ),
                                   ),
                                 ),
@@ -532,15 +543,18 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
                                   TextButton.icon(
                                     onPressed: () {
                                       setDialogState(() {
-                                        final perPerson = payerOptions.isNotEmpty
-                                            ? (currentBill / payerOptions.length)
-                                            : 0.0;
+                                        final perPerson =
+                                            payerOptions.isNotEmpty
+                                                ? (currentBill /
+                                                    payerOptions.length)
+                                                : 0.0;
                                         for (final opt in payerOptions) {
                                           final id = opt['id'].toString();
                                           tempPayerAmounts[id] = perPerson;
-                                          amountControllers[id]?.text = perPerson > 0
-                                              ? perPerson.toStringAsFixed(2)
-                                              : '';
+                                          amountControllers[id]?.text =
+                                              perPerson > 0
+                                                  ? perPerson.toStringAsFixed(2)
+                                                  : '';
                                         }
                                       });
                                     },
@@ -598,8 +612,9 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
                                 height: 40,
                                 child: TextField(
                                   controller: controller,
-                                  keyboardType: const TextInputType
-                                      .numberWithOptions(decimal: true),
+                                  keyboardType:
+                                      const TextInputType.numberWithOptions(
+                                          decimal: true),
                                   inputFormatters: [
                                     FilteringTextInputFormatter.allow(
                                         RegExp(r'^\d+\.?\d{0,2}')),
@@ -660,7 +675,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
                           content: Text(
                             'Total paid (${currencyProvider.format(currentPaid)}) must match bill amount (${currencyProvider.format(currentBill)})',
                           ),
-                          backgroundColor: Colors.red,
+                          backgroundColor: AppSemanticColors.negativeFill,
                           duration: const Duration(seconds: 2),
                         ),
                       );
@@ -672,7 +687,8 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
                     }
                     setState(() {
                       _isMultiplePayers = true;
-                      _payerAmounts = Map<String, double>.from(tempPayerAmounts);
+                      _payerAmounts =
+                          Map<String, double>.from(tempPayerAmounts);
                     });
                     Navigator.pop(ctx);
                     _scheduleAutoSave();
@@ -741,7 +757,8 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
     // Equal split calculation
     if (_splitType == SplitType.equal) {
       final totalAmount = double.tryParse(_totalAmountController.text) ?? 0;
-      final totalParticipants = _selectedContactsData.length + 1; // You + friends
+      final totalParticipants =
+          _selectedContactsData.length + 1; // You + friends
       final perPersonAmount =
           totalParticipants > 0 ? totalAmount / totalParticipants : 0;
 
@@ -850,11 +867,11 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
     try {
       final friendProvider =
           Provider.of<FriendProvider>(context, listen: false);
-      final groupProvider =
-          Provider.of<GroupProvider>(context, listen: false);
+      final groupProvider = Provider.of<GroupProvider>(context, listen: false);
 
       // If providers already have cached contacts, populate immediately with no spinner!
-      final bool hasCached = friendProvider.friends.isNotEmpty || groupProvider.groups.isNotEmpty;
+      final bool hasCached =
+          friendProvider.friends.isNotEmpty || groupProvider.groups.isNotEmpty;
       if (hasCached) {
         setState(() {
           _populateContactsFromProviders(friendProvider, groupProvider);
@@ -898,15 +915,17 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
               .eq('user_id', userId);
           for (final c in customRes) {
             final id = c['id'].toString();
-            contactMap.putIfAbsent(id, () => {
-              'id': id,
-              'name': c['name'] ?? 'Friend',
-              'username': null,
-              'avatar_url': null,
-              'is_custom': true,
-              'linked_user_id': c['linked_user_id']?.toString(),
-              'isGroup': false,
-            });
+            contactMap.putIfAbsent(
+                id,
+                () => {
+                      'id': id,
+                      'name': c['name'] ?? 'Friend',
+                      'username': null,
+                      'avatar_url': null,
+                      'is_custom': true,
+                      'linked_user_id': c['linked_user_id']?.toString(),
+                      'isGroup': false,
+                    });
           }
         } catch (err) {
           LoggerService.warning('Direct custom_friends query fallback: $err');
@@ -977,6 +996,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
       canPop: !_hasMeaningfulContent,
       onPopInvokedWithResult: (didPop, result) async {
         if (didPop) return;
+        if (_isSaving) return; // never interrupt an in-flight save
         final shouldDiscard = await _showDiscardDialog();
         if (shouldDiscard == true) {
           _isDiscardedOrSaved = true;
@@ -1003,12 +1023,19 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
             ),
           ],
         ),
-        body: _isLoading
-            ? LoadingSpinner(
-                initialMessage: _loadingMessage,
-                wakeUpMessage: 'Please wait as the backend wakes up...',
-              )
-            : _buildMainContent(),
+        body: Column(
+          children: [
+            if (_isSaving) const LinearProgressIndicator(minHeight: 2.5),
+            Expanded(
+              child: _isLoading
+                  ? LoadingSpinner(
+                      initialMessage: _loadingMessage,
+                      wakeUpMessage: 'Please wait as the backend wakes up...',
+                    )
+                  : _buildMainContent(),
+            ),
+          ],
+        ),
         bottomNavigationBar: _buildBottomButton(),
       ),
     );
@@ -1024,68 +1051,70 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
           children: [
             Expanded(
               child: SingleChildScrollView(
-                keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
                 padding: const EdgeInsets.all(16.0),
                 child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  ContactSelectorSection(
-                    searchController: _searchController,
-                    searchQuery: _searchQuery,
-                    availableContacts: _availableContacts,
-                    selectedContacts: _selectedContactsData,
-                    onContactSelected: (contact) {
-                      _addSelectedContact(contact);
-                      _scheduleAutoSave();
-                    },
-                    onContactRemoved: (contact) {
-                      _removeSelectedContact(contact);
-                      _scheduleAutoSave();
-                    },
-                    onFriendAdded: (newFriend) {
-                      setState(() {
-                        _availableContacts.add(newFriend);
-                        _addSelectedContact(newFriend);
-                      });
-                      _scheduleAutoSave();
-                    },
-                  ),
-                  _buildBasicExpenseDetails(),
-                  SplitOptionsWidget(
-                    tabController: _tabController,
-                    splitType: _splitType,
-                    selectedContacts: _selectedContactsData,
-                    totalAmountController: _totalAmountController,
-                    individualAmountControllers: _individualAmountControllers,
-                    individualPercentControllers: _individualPercentControllers,
-                    payerId: _payerId,
-                    isMultiplePayers: _isMultiplePayers,
-                    payerAmounts: _payerAmounts,
-                    onSplitTypeChanged: (type) {
-                      setState(() {
-                        _splitType = type;
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    ContactSelectorSection(
+                      searchController: _searchController,
+                      searchQuery: _searchQuery,
+                      availableContacts: _availableContacts,
+                      selectedContacts: _selectedContactsData,
+                      onContactSelected: (contact) {
+                        _addSelectedContact(contact);
+                        _scheduleAutoSave();
+                      },
+                      onContactRemoved: (contact) {
+                        _removeSelectedContact(contact);
+                        _scheduleAutoSave();
+                      },
+                      onFriendAdded: (newFriend) {
+                        setState(() {
+                          _availableContacts.add(newFriend);
+                          _addSelectedContact(newFriend);
+                        });
+                        _scheduleAutoSave();
+                      },
+                    ),
+                    _buildBasicExpenseDetails(),
+                    SplitOptionsWidget(
+                      tabController: _tabController,
+                      splitType: _splitType,
+                      selectedContacts: _selectedContactsData,
+                      totalAmountController: _totalAmountController,
+                      individualAmountControllers: _individualAmountControllers,
+                      individualPercentControllers:
+                          _individualPercentControllers,
+                      payerId: _payerId,
+                      isMultiplePayers: _isMultiplePayers,
+                      payerAmounts: _payerAmounts,
+                      onSplitTypeChanged: (type) {
+                        setState(() {
+                          _splitType = type;
+                          _updateSplitAmounts();
+                        });
+                      },
+                      onAmountsChanged: () {
                         _updateSplitAmounts();
-                      });
-                    },
-                    onAmountsChanged: () {
-                      _updateSplitAmounts();
-                    },
-                  ),
-                  ReceiptScannerSection(
-                    billEntries: _billEntries,
-                    onBatchAssign: _billEntries.isNotEmpty
-                        ? _showBatchAssignmentOptions
-                        : null,
-                    onEditItem: _assignItemToContacts,
-                    onAddCharge: _showAddCustomChargeDialog,
-                    onDeleteItem: _deleteBillEntry,
-                  ),
-                  const SizedBox(height: 80), // Space for button
-                ],
+                      },
+                    ),
+                    ReceiptScannerSection(
+                      billEntries: _billEntries,
+                      onBatchAssign: _billEntries.isNotEmpty
+                          ? _showBatchAssignmentOptions
+                          : null,
+                      onEditItem: _assignItemToContacts,
+                      onAddCharge: _showAddCustomChargeDialog,
+                      onDeleteItem: _deleteBillEntry,
+                    ),
+                    const SizedBox(height: 80), // Space for button
+                  ],
+                ),
               ),
             ),
-          ),
-        ],
+          ],
         ),
       ),
     );
@@ -1214,20 +1243,32 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
       ],
     );
   }
+
   Widget _buildBottomButton() {
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.all(16.0),
         child: ElevatedButton(
-          onPressed: _saveExpense,
+          onPressed: _isSaving ? null : _saveExpense,
           style: ElevatedButton.styleFrom(
             padding: const EdgeInsets.all(16),
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             backgroundColor: Theme.of(context).colorScheme.primary,
             foregroundColor: Theme.of(context).colorScheme.onPrimary,
           ),
-          child: const Text('SAVE EXPENSE', style: TextStyle(fontSize: 16)),
+          child: _isSaving
+              ? const Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                    SizedBox(width: 12),
+                    Text('SAVING...', style: TextStyle(fontSize: 16)),
+                  ],
+                )
+              : const Text('SAVE EXPENSE', style: TextStyle(fontSize: 16)),
         ),
       ),
     );
@@ -1301,7 +1342,8 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
         return File(result.path);
       }
     } catch (e) {
-      LoggerService.warning('Native image compression unavailable, falling back: $e');
+      LoggerService.warning(
+          'Native image compression unavailable, falling back: $e');
     }
 
     // 2. Pure Dart fallback if native compression is not supported
@@ -1309,17 +1351,20 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
       final bytes = await file.readAsBytes();
       final image = img.decodeImage(bytes);
       if (image == null) {
-        LoggerService.warning('Could not decode image for compression, using original file.');
+        LoggerService.warning(
+            'Could not decode image for compression, using original file.');
         return file;
       }
       final resized = img.copyResize(image, width: 1024);
       final compressedBytes = img.encodeJpg(resized, quality: 80);
       final tempDir = file.parent.path;
-      final tempPath = '$tempDir/compressed_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final tempPath =
+          '$tempDir/compressed_${DateTime.now().millisecondsSinceEpoch}.jpg';
       final compressedFile = File(tempPath)..writeAsBytesSync(compressedBytes);
       return compressedFile;
     } catch (e) {
-      LoggerService.warning('Image compression failed, using original file: $e');
+      LoggerService.warning(
+          'Image compression failed, using original file: $e');
       return file;
     }
   }
@@ -1405,15 +1450,19 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
         if (newEntries.isEmpty) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('No individual items could be identified from the bill.'),
+              content: Text(
+                  'No individual items could be identified from the bill.'),
               backgroundColor: Colors.orange,
             ),
           );
         } else {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Extracted ${newEntries.length} items from receipt!'),
-              backgroundColor: Colors.green,
+              content: Text(
+                'Extracted ${newEntries.length} items from receipt!',
+                style: const TextStyle(color: AppSemanticColors.onPositiveFill),
+              ),
+              backgroundColor: AppSemanticColors.positiveFill,
             ),
           );
         }
@@ -1424,8 +1473,9 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
         setState(() => _isLoading = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error reading receipt: ${e.toString().replaceAll("Exception: ", "")}'),
-            backgroundColor: Colors.red,
+            content: Text(
+                'Error reading receipt: ${e.toString().replaceAll("Exception: ", "")}'),
+            backgroundColor: AppSemanticColors.negativeFill,
             duration: const Duration(seconds: 6),
           ),
         );
@@ -1580,7 +1630,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
   void _updateAmountsBasedOnItemAssignments() {
     // Skip if no items or contacts
     if (_billEntries.isEmpty || _selectedContactsData.isEmpty) return;
-    
+
     // Switch to manual split without triggering repeated tab animations if already manual
     if (_splitType != SplitType.manual) {
       _splitType = SplitType.manual;
@@ -1588,51 +1638,51 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
         _tabController.index = SplitType.manual.index;
       }
     }
-  
-  // Calculate amounts per person based on item assignments
-  Map<String, double> personAmounts = {};
-  
-  // Initialize all people with zero amounts
-  for (final contact in _selectedContactsData) {
-    personAmounts[contact['name']] = 0;
-  }
-  personAmounts['You'] = 0; // Current user
-  
-  // Calculate each person's share based on assigned items
-  for (final item in _billEntries) {
-    if (item.assignedTo.isEmpty) continue;
-    
-    // Split item amount equally among assignees
-    final perPersonAmount = item.amount / item.assignedTo.length;
-    
-    // Subtract for discounts, add for taxes/items
-    for (final assignee in item.assignedTo) {
-      if (item.type == BillEntryType.discount) {
-        personAmounts[assignee] =
-            (personAmounts[assignee] ?? 0) - perPersonAmount;
-      } else {
-        personAmounts[assignee] =
-            (personAmounts[assignee] ?? 0) + perPersonAmount;
+
+    // Calculate amounts per person based on item assignments
+    Map<String, double> personAmounts = {};
+
+    // Initialize all people with zero amounts
+    for (final contact in _selectedContactsData) {
+      personAmounts[contact['name']] = 0;
+    }
+    personAmounts['You'] = 0; // Current user
+
+    // Calculate each person's share based on assigned items
+    for (final item in _billEntries) {
+      if (item.assignedTo.isEmpty) continue;
+
+      // Split item amount equally among assignees
+      final perPersonAmount = item.amount / item.assignedTo.length;
+
+      // Subtract for discounts, add for taxes/items
+      for (final assignee in item.assignedTo) {
+        if (item.type == BillEntryType.discount) {
+          personAmounts[assignee] =
+              (personAmounts[assignee] ?? 0) - perPersonAmount;
+        } else {
+          personAmounts[assignee] =
+              (personAmounts[assignee] ?? 0) + perPersonAmount;
+        }
       }
     }
+
+    // Update controllers for each contact
+    for (final contact in _selectedContactsData) {
+      final id = contact['id'].toString();
+      final name = contact['name'] as String;
+      final amt = personAmounts[name] ?? 0;
+      _individualAmountControllers[id]?.text =
+          (amt < 0 ? 0.0 : amt).toStringAsFixed(2);
+    }
+
+    // Update "You" controller
+    final yourAmt = personAmounts['You'] ?? 0;
+    _individualAmountControllers['you']?.text =
+        (yourAmt < 0 ? 0.0 : yourAmt).toStringAsFixed(2);
+
+    setState(() {});
   }
-  
-  // Update controllers for each contact
-  for (final contact in _selectedContactsData) {
-    final id = contact['id'].toString();
-    final name = contact['name'] as String;
-    final amt = personAmounts[name] ?? 0;
-    _individualAmountControllers[id]?.text = 
-        (amt < 0 ? 0.0 : amt).toStringAsFixed(2);
-  }
-  
-  // Update "You" controller
-  final yourAmt = personAmounts['You'] ?? 0;
-  _individualAmountControllers['you']?.text = 
-      (yourAmt < 0 ? 0.0 : yourAmt).toStringAsFixed(2);
-  
-  setState(() {});
-}
 
   void _recalculateTotalFromBillEntries() {
     if (_billEntries.isEmpty) return;
@@ -1686,8 +1736,11 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
 
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Added "$description" successfully!'),
-              backgroundColor: Colors.green,
+              content: Text(
+                'Added "$description" successfully!',
+                style: const TextStyle(color: AppSemanticColors.onPositiveFill),
+              ),
+              backgroundColor: AppSemanticColors.positiveFill,
             ),
           );
         },
@@ -1716,7 +1769,8 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
     FocusManager.instance.primaryFocus?.unfocus();
 
     // Get all available names
-    final allNames = _selectedContactsData.map((c) => c['name'] as String).toList();
+    final allNames =
+        _selectedContactsData.map((c) => c['name'] as String).toList();
     allNames.add('You'); // Add current user
 
     showDialog(
@@ -1757,7 +1811,9 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
       final totalAmount = double.tryParse(_totalAmountController.text) ?? 0.0;
       if (totalAmount <= 0) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Please enter an amount before downloading the PDF')),
+          const SnackBar(
+              content:
+                  Text('Please enter an amount before downloading the PDF')),
         );
         return;
       }
@@ -1873,7 +1929,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Error generating PDF: $e'),
-            backgroundColor: Colors.red,
+            backgroundColor: AppSemanticColors.negativeFill,
           ),
         );
       }
@@ -1892,13 +1948,14 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
       final sumPaid = _payerAmounts.values.fold(0.0, (sum, val) => sum + val);
       if (totalAmount > 0 && (sumPaid - totalAmount).abs() > 0.05) {
         final currencySymbol =
-            Provider.of<CurrencyProvider>(context, listen: false).currencySymbol;
+            Provider.of<CurrencyProvider>(context, listen: false)
+                .currencySymbol;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
               'Total paid ($currencySymbol${sumPaid.toStringAsFixed(2)}) does not match expense amount ($currencySymbol${totalAmount.toStringAsFixed(2)}). Please adjust payer amounts.',
             ),
-            backgroundColor: Colors.red,
+            backgroundColor: AppSemanticColors.negativeFill,
           ),
         );
         return;
@@ -1914,8 +1971,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
         final currencyCode = currencyProvider.currencyCode;
 
         setState(() {
-          _isLoading = true;
-          _loadingMessage = 'Saving expense & updating balances...';
+          _isSaving = true;
         });
 
         // Get the current user ID
@@ -1934,7 +1990,9 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
         // Determine effective group ID if a group contact or widget.groupId is present
         int? effectiveGroupId = widget.groupId;
         if (effectiveGroupId == null) {
-          final groupContact = _selectedContactsData.where((c) => c['isGroup'] == true).firstOrNull;
+          final groupContact = _selectedContactsData
+              .where((c) => c['isGroup'] == true)
+              .firstOrNull;
           if (groupContact != null) {
             effectiveGroupId = groupContact['id'] as int?;
           }
@@ -1964,17 +2022,21 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
         if (success) {
           final expenseId = expenseProvider.lastInsertedId;
           final splitType = _splitType;
-          final selectedContacts = List<Map<String, dynamic>>.from(_selectedContactsData);
+          final selectedContacts =
+              List<Map<String, dynamic>>.from(_selectedContactsData);
           final Map<String, String> manualAmounts = {};
           final Map<String, String> percentageAmounts = {};
 
           for (final contact in selectedContacts) {
             final id = contact['id'].toString();
             manualAmounts[id] = _individualAmountControllers[id]?.text ?? '0';
-            percentageAmounts[id] = _individualPercentControllers[id]?.text ?? '0';
+            percentageAmounts[id] =
+                _individualPercentControllers[id]?.text ?? '0';
           }
-          manualAmounts['you'] = _individualAmountControllers['you']?.text ?? '';
-          percentageAmounts['you'] = _individualPercentControllers['you']?.text ?? '';
+          manualAmounts['you'] =
+              _individualAmountControllers['you']?.text ?? '';
+          percentageAmounts['you'] =
+              _individualPercentControllers['you']?.text ?? '';
 
           // Save participants
           try {
@@ -1993,7 +2055,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
           } catch (e) {
             LoggerService.error('Error saving participants', e);
             if (!mounted) return;
-            setState(() => _isLoading = false);
+            setState(() => _isSaving = false);
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(content: Text('Error saving participants: $e')),
             );
@@ -2002,7 +2064,8 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
 
           // Link receipt if available
           if (_currentReceiptId != null) {
-            await _receiptService.linkReceiptToExpense(_currentReceiptId!, expenseId);
+            await _receiptService.linkReceiptToExpense(
+                _currentReceiptId!, expenseId);
           }
           if (!mounted) return;
 
@@ -2017,16 +2080,16 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
           );
           Navigator.pop(context);
         } else {
-          setState(() => _isLoading = false);
+          setState(() => _isSaving = false);
         }
       } catch (e) {
         LoggerService.error('Error saving expense', e);
 
         if (mounted) {
+          setState(() => _isSaving = false);
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('Error saving expense: $e')),
           );
-          setState(() => _isLoading = false);
         }
       }
     }
@@ -2045,7 +2108,8 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
       final safeName = name.replaceAll(' ', '').toLowerCase();
       final profileData = {
         'id': customFriendId,
-        'username': 'custom_${safeName}_${customFriendId.replaceAll('-', '').substring(0, 4)}',
+        'username':
+            'custom_${safeName}_${customFriendId.replaceAll('-', '').substring(0, 4)}',
         'full_name': name,
         'updated_at': DateTime.now().toIso8601String(),
         'currency': 'INR',
@@ -2055,7 +2119,8 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
       await _supabase.from('profiles').insert(profileData);
       return true;
     } catch (e) {
-      LoggerService.warning('Cannot create shadow profile for custom friend: $e');
+      LoggerService.warning(
+          'Cannot create shadow profile for custom friend: $e');
       return false;
     }
   }
@@ -2130,7 +2195,8 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
 
     // All distinct participants list (registered + unlinked custom)
     final allParticipantsList = [
-      ...registeredParticipantIds.map((id) => {'id': id, 'is_custom_unlinked': false}),
+      ...registeredParticipantIds
+          .map((id) => {'id': id, 'is_custom_unlinked': false}),
       ...unlinkedCustomFriends.map((c) => {
             'id': c['id'].toString(),
             'is_custom_unlinked': true,
@@ -2170,8 +2236,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen>
           final pct = double.tryParse(percentageAmounts[id] ?? '0') ?? 0.0;
           userShares[id] = (pct / 100.0) * totalAmount;
         }
-        final yourPct =
-            double.tryParse(percentageAmounts['you'] ?? '0') ?? 0.0;
+        final yourPct = double.tryParse(percentageAmounts['you'] ?? '0') ?? 0.0;
         userShares[currentUserId] = (yourPct / 100.0) * totalAmount;
         break;
     }

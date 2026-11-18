@@ -24,7 +24,10 @@ class WeeklySpendingChart extends StatelessWidget {
     } else if (index < currentWeekIndex) {
       return Theme.of(context).colorScheme.primary;
     } else {
-      return Colors.grey.shade400;
+      return Theme.of(context)
+          .colorScheme
+          .onSurfaceVariant
+          .withValues(alpha: 0.35);
     }
   }
 
@@ -82,12 +85,16 @@ class WeeklySpendingChart extends StatelessWidget {
                           barTouchData: BarTouchData(
                             enabled: true,
                             touchTooltipData: BarTouchTooltipData(
-                              getTooltipColor: (spot) => Colors.blueGrey,
+                              getTooltipColor: (spot) =>
+                                  Theme.of(context).colorScheme.inverseSurface,
                               getTooltipItem:
                                   (group, groupIndex, rod, rodIndex) {
                                 return BarTooltipItem(
                                   currencyProvider.format(rod.toY),
-                                  const TextStyle(color: Colors.white),
+                                  TextStyle(
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .onInverseSurface),
                                 );
                               },
                             ),
@@ -98,8 +105,7 @@ class WeeklySpendingChart extends StatelessWidget {
                               sideTitles: SideTitles(
                                 showTitles: true,
                                 getTitlesWidget: (value, meta) {
-                                  if (value < 0 ||
-                                      value >= weekLabels.length) {
+                                  if (value < 0 || value >= weekLabels.length) {
                                     return const Text('');
                                   }
                                   return Padding(
@@ -150,27 +156,36 @@ class WeeklySpendingChart extends StatelessWidget {
                     ),
             ),
             const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                _buildLegendItem(
-                  context,
-                  Theme.of(context).colorScheme.primary,
-                  'Past weeks',
-                ),
-                const SizedBox(width: 24),
-                _buildLegendItem(
-                  context,
-                  Theme.of(context).colorScheme.primary.withValues(alpha: 0.8),
-                  'This week',
-                ),
-                const SizedBox(width: 24),
-                _buildLegendItem(
-                  context,
-                  Colors.grey.shade400,
-                  'Projected',
-                ),
-              ],
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _buildLegendItem(
+                    context,
+                    Theme.of(context).colorScheme.primary,
+                    'Past weeks',
+                  ),
+                  const SizedBox(width: 24),
+                  _buildLegendItem(
+                    context,
+                    Theme.of(context)
+                        .colorScheme
+                        .primary
+                        .withValues(alpha: 0.8),
+                    'This week',
+                  ),
+                  const SizedBox(width: 24),
+                  _buildLegendItem(
+                    context,
+                    Theme.of(context)
+                        .colorScheme
+                        .onSurfaceVariant
+                        .withValues(alpha: 0.35),
+                    'Projected',
+                  ),
+                ],
+              ),
             ),
           ],
         ),

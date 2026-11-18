@@ -122,13 +122,65 @@ class CustomFriendBalanceService {
     }
   }
 
+  /// Record a settle-up payment for an unlinked custom friend: adjusts the
+  /// local balance AND appends a history entry so the settlement is visible
+  /// in the friend's activity list (previously it silently adjusted numbers
+  /// with no record — "Settle up does nothing").
+  static Future<void> recordSettlement({
+    required String customFriendId,
+    required String friendName,
+    required double amount,
+    required bool youPaid,
+    String? note,
+  }) async {
+    // Reducing the debt from either side moves the net the same way.
+    await adjustBalance(
+      customFriendId: customFriendId,
+      deltaAmount: youPaid ? amount : -amount,
+    );
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = '$_expensesKeyPrefix$customFriendId';
+      final existingRaw = prefs.getString(key);
+      List<dynamic> list = [];
+      if (existingRaw != null && existingRaw.isNotEmpty) {
+        list = jsonDecode(existingRaw) as List<dynamic>;
+      }
+      final now = DateTime.now();
+      list.insert(0, {
+        'expense_id': 0,
+        'description': (note != null && note.trim().isNotEmpty)
+            ? 'Settlement — ${note.trim()}'
+            : (youPaid
+                ? 'Settlement — you paid $friendName'
+                : 'Settlement — $friendName paid you'),
+        'total_amount': amount,
+        'friend_share': 0.0,
+        'your_share': 0.0,
+        'paid_by_you': youPaid,
+        'payer_id': youPaid ? 'you' : customFriendId,
+        'paid_amount': 0.0,
+        'is_settlement': true,
+        'date': now.toIso8601String(),
+      });
+      if (list.length > 50) {
+        list = list.sublist(0, 50);
+      }
+      await prefs.setString(key, jsonEncode(list));
+    } catch (e) {
+      LoggerService.warning('Failed to record custom settlement: $e');
+    }
+  }
+
   /// Clear all cached data for a custom friend when deleted
   static Future<void> clearFriendData(String customFriendId) async {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove('$_balanceKeyPrefix$customFriendId');
       await prefs.remove('$_expensesKeyPrefix$customFriendId');
-      LoggerService.info('Cleared local data for custom friend $customFriendId');
+      LoggerService.info(
+          'Cleared local data for custom friend $customFriendId');
     } catch (e) {
       LoggerService.warning('Failed to clear custom friend data: $e');
     }

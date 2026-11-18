@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../providers/currency_provider.dart';
@@ -8,6 +9,7 @@ import '../database/balance.dart';
 import '../database/expense.dart';
 import '../database/payment.dart';
 import '../services/custom_friend_balance_service.dart';
+import '../theme/theme.dart';
 import '../widgets/loading_spinner.dart';
 import '../widgets/link_friend_dialog.dart';
 import '../widgets/friend_quick_action_modal.dart';
@@ -56,19 +58,29 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
     super.dispose();
   }
 
+  DateTime? _lastDetailsLoad;
+
   void _onExpensesChanged() {
     if (mounted) {
+      // Realtime/provider refreshes can fire in bursts; 4 s is plenty for
+      // the row list to catch up, and explicit actions pass force.
+      final now = DateTime.now();
+      if (_lastDetailsLoad != null &&
+          now.difference(_lastDetailsLoad!) < const Duration(seconds: 4)) {
+        return;
+      }
       _loadFriendDetails();
     }
   }
 
   Future<void> _loadFriendDetails() async {
+    _lastDetailsLoad = DateTime.now();
     setState(() => _loading = true);
     try {
       final friendProvider =
           Provider.of<FriendProvider>(context, listen: false);
-      final data = await friendProvider
-          .fetchFriendDetailsAndSharedData(widget.friendId);
+      final data =
+          await friendProvider.fetchFriendDetailsAndSharedData(widget.friendId);
 
       if (!mounted) return;
       setState(() {
@@ -159,7 +171,7 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text('Failed to delete friend: $e'),
-              backgroundColor: Colors.red,
+              backgroundColor: AppSemanticColors.negativeFill,
             ),
           );
         }
@@ -230,79 +242,94 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
   }
 
   Future<void> _settleUp() async {
-    final selectedAmount = await showDialog<double>(
+    final currencyProvider =
+        Provider.of<CurrencyProvider>(context, listen: false);
+    final friendName =
+        _friendProfile?['full_name'] ?? _friendProfile?['username'] ?? 'friend';
+
+    final record = await showDialog<SettlementRecord>(
       context: context,
       builder: (ctx) => SettleUpDialog(
         youOwe: _youOwe,
         youAreOwed: _youAreOwed,
+        friendName: friendName,
+        currencySymbol: currencyProvider.currencySymbol,
       ),
     );
+    if (record == null || record.amount <= 0 || !mounted) return;
 
-    if (selectedAmount != null && selectedAmount > 0 && mounted) {
-      setState(() => _loading = true);
-      try {
-        final currencyProvider = Provider.of<CurrencyProvider>(context, listen: false);
+    setState(() => _loading = true);
+    try {
+      if (_isCustomFriend && !_isLinked) {
+        // Local-only friend: adjust the tracked balance AND leave a visible
+        // "settlement" entry in the history — previously nothing showed.
+        await CustomFriendBalanceService.recordSettlement(
+          customFriendId: widget.friendId.toString(),
+          friendName: friendName,
+          amount: record.amount,
+          youPaid: record.youPaid,
+          note: record.note,
+        );
+      } else {
+        final fromId =
+            record.youPaid ? _currentUserId! : widget.friendId.toString();
+        final toId =
+            record.youPaid ? widget.friendId.toString() : _currentUserId!;
 
-        if (_isCustomFriend && !_isLinked) {
-          final delta = _netBalance > 0 ? -selectedAmount : selectedAmount;
-          await CustomFriendBalanceService.adjustBalance(
-            customFriendId: widget.friendId.toString(),
-            deltaAmount: delta,
-          );
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                  'Settlement of ${currencyProvider.format(selectedAmount)} recorded'),
-            ),
-          );
-          await _loadFriendDetails();
-          return;
-        }
-
-        final currencyCode = currencyProvider.currencyCode;
-        final fromId = _netBalance < 0 ? _currentUserId! : widget.friendId.toString();
-        final toId = _netBalance < 0 ? widget.friendId.toString() : _currentUserId!;
-
-        // 1. Create a payment record via PaymentService
+        // 1. Record the payment (throws on failure — no more fake "recorded"
+        //    toasts when the insert actually failed).
         await PaymentService().createPaymentRecord(
           fromUserId: fromId,
           toUserId: toId,
-          amount: selectedAmount,
-          currency: currencyCode,
+          amount: record.amount,
+          currency: currencyProvider.currencyCode,
           paymentMethod: 'manual',
-          notes: 'Settlement payment',
+          notes: (record.note != null && record.note!.trim().isNotEmpty)
+              ? record.note!.trim()
+              : 'Settlement payment',
         );
 
-        // 2. Adjust balances in database
-        final balanceService = BalanceService();
-        await balanceService.adjustBalance(
+        // 2. Keep the aggregate balances table in sync (reduces the debt).
+        await BalanceService().adjustBalance(
           fromUserId: toId, // creditor
           toUserId: fromId, // debtor
-          deltaAmount: -selectedAmount, // reduces the debt
-          currency: currencyCode,
-        );
-
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Settlement of ${currencyProvider.format(selectedAmount)} recorded'),
-          ),
-        );
-
-        // Refresh data
-        await _loadFriendDetails();
-      } catch (e) {
-        if (!mounted) return;
-        setState(() {
-          _loading = false;
-          _error = true;
-          _errorMsg = e.toString();
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error recording payment: $e')),
+          deltaAmount: -record.amount,
+          currency: currencyProvider.currencyCode,
         );
       }
+
+      // Keep the friends list rows in sync for both paths (linked + custom).
+      if (mounted) {
+        try {
+          await Provider.of<FriendProvider>(context, listen: false)
+              .fetchFriendsAndRequests();
+        } catch (_) {}
+      }
+
+      if (!mounted) return;
+      final amountText = currencyProvider.format(record.amount);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: AppSemanticColors.positiveFill,
+          content: Text(
+            record.youPaid
+                ? 'Recorded: you paid $amountText to $friendName'
+                : 'Recorded: $friendName paid you $amountText',
+            style: const TextStyle(color: AppSemanticColors.onPositiveFill),
+          ),
+        ),
+      );
+      await _loadFriendDetails();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: AppSemanticColors.negativeFill,
+          content: Text(
+              'Could not record the payment. Check your connection and try again. ($e)'),
+        ),
+      );
     }
   }
 
@@ -389,7 +416,7 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 16,
-                          color: Colors.grey.shade800,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
                         ),
                       ),
                       Text(
@@ -397,7 +424,9 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 18,
-                          color: _netBalance >= 0 ? Colors.green : Colors.red,
+                          color: _netBalance >= 0
+                              ? AppSemanticColors.positive(context)
+                              : AppSemanticColors.negative(context),
                         ),
                       ),
                     ],
@@ -448,11 +477,18 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
                               margin: const EdgeInsets.symmetric(
                                   horizontal: 16, vertical: 4),
                               child: ListTile(
-                                onTap: () => _openExpenseDetails(exp),
+                                onTap: exp['is_settlement'] == true
+                                    ? null
+                                    : () => _openExpenseDetails(exp),
                                 leading: CircleAvatar(
                                   backgroundColor:
                                       primaryColor.withValues(alpha: 0.1),
-                                  child: Icon(Icons.receipt, color: primaryColor),
+                                  child: Icon(
+                                    exp['is_settlement'] == true
+                                        ? Icons.handshake
+                                        : Icons.receipt,
+                                    color: primaryColor,
+                                  ),
                                 ),
                                 title: Text(
                                   exp['description'],
@@ -480,7 +516,9 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
                                       'Your share: ${currencyProvider.format(exp['your_share'])}',
                                       style: TextStyle(
                                         fontSize: 12,
-                                        color: Colors.grey.shade600,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurfaceVariant,
                                       ),
                                     ),
                                   ],
@@ -553,11 +591,15 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
                       ),
                       const SizedBox(height: 8),
                       if (_payments.isEmpty)
-                        const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 8),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 8),
                           child: Text(
                             'No settlements recorded yet.',
-                            style: TextStyle(color: Colors.grey),
+                            style: TextStyle(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant,
+                            ),
                           ),
                         )
                       else
@@ -566,30 +608,42 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
                             shrinkWrap: true,
                             physics: const NeverScrollableScrollPhysics(),
                             itemCount: _payments.length,
-                            separatorBuilder: (_, __) =>
-                                Divider(height: 1, color: Theme.of(context).dividerColor),
+                            separatorBuilder: (_, __) => Divider(
+                                height: 1,
+                                color: Theme.of(context).dividerColor),
                             itemBuilder: (ctx, idx) {
                               final p = _payments[idx];
-                              final isPayer = p['from_user_id'] == _currentUserId;
+                              final isPayer =
+                                  p['from_user_id'] == _currentUserId;
                               final pAmt = (p['amount'] as num).toDouble();
                               final pDate = p['payment_date'] != null
                                   ? DateTime.parse(p['payment_date'] as String)
                                   : null;
+                              final settlementColor = isPayer
+                                  ? AppSemanticColors.negative(context)
+                                  : AppSemanticColors.positive(context);
                               return ListTile(
                                 leading: CircleAvatar(
-                                  backgroundColor: isPayer ? Colors.orange.shade100 : Colors.green.shade100,
+                                  backgroundColor:
+                                      settlementColor.withValues(alpha: 0.14),
                                   child: Icon(
-                                    isPayer ? Icons.arrow_upward : Icons.arrow_downward,
-                                    color: isPayer ? Colors.orange.shade800 : Colors.green.shade800,
+                                    isPayer
+                                        ? Icons.arrow_upward
+                                        : Icons.arrow_downward,
+                                    color: settlementColor,
                                   ),
                                 ),
-                                title: Text(isPayer ? 'You paid friend' : 'Friend paid you'),
-                                subtitle: pDate != null ? Text(DateFormat.yMMMd().format(pDate)) : null,
+                                title: Text(isPayer
+                                    ? 'You paid friend'
+                                    : 'Friend paid you'),
+                                subtitle: pDate != null
+                                    ? Text(DateFormat.yMMMd().format(pDate))
+                                    : null,
                                 trailing: Text(
                                   currencyProvider.format(pAmt),
                                   style: TextStyle(
                                     fontWeight: FontWeight.bold,
-                                    color: isPayer ? Colors.orange.shade800 : Colors.green.shade800,
+                                    color: settlementColor,
                                   ),
                                 ),
                               );
@@ -604,29 +658,41 @@ class _FriendDetailsScreenState extends State<FriendDetailsScreen>
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _openQuickExpense,
-        backgroundColor: primaryColor,
-        foregroundColor: onPrimaryColor,
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.all(Radius.circular(16)),
-        ),
-        icon: const Icon(Icons.bolt),
-        label: const Text('Quick Expense'),
-      ),
     );
   }
 }
 
-// Dialog for settling up
+// Result of the settle-up dialog.
+class SettlementRecord {
+  final double amount;
+  final bool youPaid;
+  final String? note;
+
+  const SettlementRecord({
+    required this.amount,
+    required this.youPaid,
+    this.note,
+  });
+}
+
+/// Dialog for settling up.
+///
+/// Replaces the old text-only confirm: the direction ("you pay" vs "they
+/// pay") is now explicit and adjustable, the amount defaults to the net
+/// balance but can be over/under-paid, a note can be attached, and the
+/// currency follows the user's preference instead of a hardcoded rupee sign.
 class SettleUpDialog extends StatefulWidget {
   final double youOwe;
   final double youAreOwed;
+  final String friendName;
+  final String currencySymbol;
 
   const SettleUpDialog({
     super.key,
     required this.youOwe,
     required this.youAreOwed,
+    required this.friendName,
+    required this.currencySymbol,
   });
 
   @override
@@ -634,81 +700,146 @@ class SettleUpDialog extends StatefulWidget {
 }
 
 class _SettleUpDialogState extends State<SettleUpDialog> {
-  late TextEditingController _amountController;
-  final _formatter = NumberFormat.currency(symbol: '₹');
-  bool _useFullAmount = true;
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _amountController;
+  final TextEditingController _noteController = TextEditingController();
+  late bool _youPay;
+
+  double get _netAmount => (widget.youAreOwed - widget.youOwe).abs();
 
   @override
   void initState() {
     super.initState();
-    final netAmount = (widget.youOwe - widget.youAreOwed).abs();
+    // Default direction: whoever owes pays.
+    _youPay = widget.youOwe > widget.youAreOwed;
     _amountController =
-        TextEditingController(text: netAmount.toStringAsFixed(2));
+        TextEditingController(text: _netAmount.toStringAsFixed(2));
   }
 
   @override
   void dispose() {
     _amountController.dispose();
+    _noteController.dispose();
     super.dispose();
+  }
+
+  String get _friendFirstName {
+    final name = widget.friendName.trim();
+    return name.isEmpty ? 'your friend' : name.split(' ').first;
   }
 
   @override
   Widget build(BuildContext context) {
-    final netAmount = (widget.youOwe - widget.youAreOwed).abs();
-    final youPay = widget.youOwe > widget.youAreOwed;
+    final theme = Theme.of(context);
+    final summary = widget.youOwe > 0
+        ? 'You owe ${widget.currencySymbol}${widget.youOwe.toStringAsFixed(2)}'
+        : '$_friendFirstName owes you '
+            '${widget.currencySymbol}${widget.youAreOwed.toStringAsFixed(2)}';
 
     return AlertDialog(
-      title: Text(youPay ? 'You Pay' : 'They Pay'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            'Settle up with ${_formatter.format(netAmount)}?',
-            style: const TextStyle(fontSize: 16),
-          ),
-          const SizedBox(height: 16),
-          CheckboxListTile(
-            title: const Text('Use full amount'),
-            value: _useFullAmount,
-            onChanged: (value) {
-              setState(() {
-                _useFullAmount = value ?? true;
-              });
-            },
-            controlAffinity: ListTileControlAffinity.leading,
-            contentPadding: EdgeInsets.zero,
-          ),
-          if (!_useFullAmount)
-            TextField(
-              controller: _amountController,
-              decoration: const InputDecoration(
-                labelText: 'Amount',
-                prefixText: '₹',
+      title: const Text('Settle up'),
+      content: Form(
+        key: _formKey,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                summary,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
               ),
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
-            ),
-        ],
+              const SizedBox(height: 16),
+              SegmentedButton<bool>(
+                segments: [
+                  ButtonSegment<bool>(
+                    value: true,
+                    label: Text('You pay $_friendFirstName'),
+                  ),
+                  ButtonSegment<bool>(
+                    value: false,
+                    label: Text('$_friendFirstName pays you'),
+                  ),
+                ],
+                selected: {_youPay},
+                onSelectionChanged: (set) =>
+                    setState(() => _youPay = set.first),
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _amountController,
+                autofocus: true,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [
+                  FilteringTextInputFormatter.allow(RegExp(r'^\d+\.?\d{0,2}')),
+                ],
+                style: theme.textTheme.titleLarge
+                    ?.copyWith(fontWeight: FontWeight.bold),
+                decoration: InputDecoration(
+                  labelText: 'Amount',
+                  prefixText: '${widget.currencySymbol} ',
+                  suffix: _netAmount > 0
+                      ? TextButton(
+                          onPressed: () {
+                            _amountController.text =
+                                _netAmount.toStringAsFixed(2);
+                            setState(() {});
+                          },
+                          style: TextButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                          ),
+                          child: const Text('Full',
+                              style: TextStyle(fontSize: 12)),
+                        )
+                      : null,
+                ),
+                validator: (value) {
+                  final amount = double.tryParse(value ?? '');
+                  if (amount == null || amount <= 0) {
+                    return 'Enter an amount greater than 0';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _noteController,
+                textInputAction: TextInputAction.done,
+                maxLength: 80,
+                decoration: const InputDecoration(
+                  labelText: 'Note (optional)',
+                  isDense: true,
+                  counterText: '',
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text('CANCEL'),
+          child: const Text('Cancel'),
         ),
-        ElevatedButton(
+        FilledButton(
           onPressed: () {
-            try {
-              final amount = _useFullAmount
-                  ? netAmount
-                  : double.parse(_amountController.text);
-              Navigator.pop(context, amount);
-            } catch (e) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Please enter a valid amount')),
-              );
-            }
+            if (!(_formKey.currentState?.validate() ?? false)) return;
+            final amount = double.parse(_amountController.text);
+            final note = _noteController.text.trim();
+            Navigator.pop(
+              context,
+              SettlementRecord(
+                amount: amount,
+                youPaid: _youPay,
+                note: note.isEmpty ? null : note,
+              ),
+            );
           },
-          child: const Text('RECORD'),
+          child: const Text('Record payment'),
         ),
       ],
     );

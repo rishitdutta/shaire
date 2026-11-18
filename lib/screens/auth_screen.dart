@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/auth_service.dart';
+import '../theme/theme.dart';
 
 class AuthScreen extends StatefulWidget {
   final bool isSignUp;
@@ -13,11 +14,14 @@ class AuthScreen extends StatefulWidget {
 }
 
 class _AuthScreenState extends State<AuthScreen> {
+  final _formKey = GlobalKey<FormState>();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _usernameController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
   bool _isLoading = false;
+  bool _obscurePassword = true;
+  bool _obscureConfirm = true;
   late bool _isSignUp;
   StreamSubscription<AuthState>? _authSubscription;
 
@@ -72,24 +76,11 @@ class _AuthScreenState extends State<AuthScreen> {
   }
 
   Future<void> _signUp() async {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+
     final email = _emailController.text.trim();
     final password = _passwordController.text;
-    final confirmPassword = _confirmPasswordController.text;
     final username = _usernameController.text.trim();
-
-    if (email.isEmpty || !email.contains('@')) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a valid email address')),
-      );
-      return;
-    }
-
-    if (password != confirmPassword) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Passwords do not match!')),
-      );
-      return;
-    }
 
     setState(() => _isLoading = true);
     try {
@@ -145,8 +136,9 @@ class _AuthScreenState extends State<AuthScreen> {
                   ? 'This email is already registered. Please sign in instead.'
                   : e.message,
             ),
-            backgroundColor:
-                isAlreadyRegistered ? Colors.orange.shade800 : Colors.red,
+            backgroundColor: isAlreadyRegistered
+                ? Colors.orange.shade800
+                : AppSemanticColors.negative(context),
             action: isAlreadyRegistered
                 ? SnackBarAction(
                     label: 'Sign In',
@@ -164,7 +156,7 @@ class _AuthScreenState extends State<AuthScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Error: $e'),
-            backgroundColor: Colors.red,
+            backgroundColor: AppSemanticColors.negativeFill,
           ),
         );
       }
@@ -174,10 +166,13 @@ class _AuthScreenState extends State<AuthScreen> {
   }
 
   Future<void> _signIn() async {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+
+    FocusScope.of(context).unfocus();
     setState(() => _isLoading = true);
     try {
       final response = await Supabase.instance.client.auth.signInWithPassword(
-        email: _emailController.text,
+        email: _emailController.text.trim(),
         password: _passwordController.text,
       );
       if (response.session != null && mounted) {
@@ -231,85 +226,155 @@ class _AuthScreenState extends State<AuthScreen> {
               ),
               const SizedBox(height: 40),
 
-              // Form fields
-              if (_isSignUp)
-                TextField(
-                  controller: _usernameController,
-                  decoration: const InputDecoration(
-                    labelText: 'Username',
-                  ),
-                ),
-              if (_isSignUp) const SizedBox(height: 16),
+              // Form fields — inline validation instead of error SnackBars
+              Form(
+                key: _formKey,
+                autovalidateMode: AutovalidateMode.onUserInteraction,
+                child: Column(
+                  children: [
+                    if (_isSignUp)
+                      TextFormField(
+                        controller: _usernameController,
+                        textInputAction: TextInputAction.next,
+                        autofillHints: const [AutofillHints.username],
+                        decoration: const InputDecoration(
+                          labelText: 'Username',
+                        ),
+                        validator: (value) {
+                          if (value == null || value.trim().length < 3) {
+                            return 'Choose a username (at least 3 characters)';
+                          }
+                          return null;
+                        },
+                      ),
+                    if (_isSignUp) const SizedBox(height: 16),
 
-              TextField(
-                controller: _emailController,
-                decoration: const InputDecoration(
-                  labelText: 'Email',
-                ),
-                keyboardType: TextInputType.emailAddress,
-              ),
-              const SizedBox(height: 16),
-
-              TextField(
-                controller: _passwordController,
-                decoration: const InputDecoration(
-                  labelText: 'Password',
-                ),
-                obscureText: true,
-              ),
-
-              if (_isSignUp)
-                Padding(
-                  padding: const EdgeInsets.only(top: 16.0),
-                  child: TextField(
-                    controller: _confirmPasswordController,
-                    decoration: const InputDecoration(
-                      labelText: 'Confirm Password',
+                    TextFormField(
+                      controller: _emailController,
+                      keyboardType: TextInputType.emailAddress,
+                      textInputAction: TextInputAction.next,
+                      autofillHints: const [AutofillHints.email],
+                      decoration: const InputDecoration(
+                        labelText: 'Email',
+                      ),
+                      validator: (value) {
+                        if (value == null || !value.contains('@')) {
+                          return 'Please enter a valid email address';
+                        }
+                        return null;
+                      },
                     ),
-                    obscureText: true,
-                  ),
-                ),
+                    const SizedBox(height: 16),
 
-              if (!_isSignUp) ...[
-                const SizedBox(height: 8),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: TextButton(
-                    onPressed: _showForgotPasswordSheet,
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 4, vertical: 4),
-                      visualDensity: VisualDensity.compact,
+                    TextFormField(
+                      controller: _passwordController,
+                      obscureText: _obscurePassword,
+                      textInputAction: _isSignUp
+                          ? TextInputAction.next
+                          : TextInputAction.done,
+                      onFieldSubmitted: (_) {
+                        if (!_isSignUp) _signIn();
+                      },
+                      autofillHints: const [AutofillHints.password],
+                      decoration: InputDecoration(
+                        labelText: 'Password',
+                        suffixIcon: IconButton(
+                          icon: Icon(_obscurePassword
+                              ? Icons.visibility_outlined
+                              : Icons.visibility_off_outlined),
+                          onPressed: () => setState(
+                              () => _obscurePassword = !_obscurePassword),
+                        ),
+                      ),
+                      validator: (value) {
+                        if (value == null || value.length < 6) {
+                          return 'Password must be at least 6 characters';
+                        }
+                        return null;
+                      },
                     ),
-                    child: Text(
-                      'Forgot Password?',
-                      style: TextStyle(
-                        color: primaryColor,
-                        fontWeight: FontWeight.w600,
+
+                    if (_isSignUp)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 16.0),
+                        child: TextFormField(
+                          controller: _confirmPasswordController,
+                          obscureText: _obscureConfirm,
+                          textInputAction: TextInputAction.done,
+                          onFieldSubmitted: (_) {
+                            if (_isSignUp) _signUp();
+                          },
+                          decoration: InputDecoration(
+                            labelText: 'Confirm Password',
+                            suffixIcon: IconButton(
+                              icon: Icon(_obscureConfirm
+                                  ? Icons.visibility_outlined
+                                  : Icons.visibility_off_outlined),
+                              onPressed: () => setState(
+                                  () => _obscureConfirm = !_obscureConfirm),
+                            ),
+                          ),
+                          validator: (value) {
+                            if (value != _passwordController.text) {
+                              return 'Passwords do not match';
+                            }
+                            return null;
+                          },
+                        ),
+                      ),
+
+                    if (!_isSignUp) ...[
+                      const SizedBox(height: 8),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton(
+                          onPressed: _showForgotPasswordSheet,
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 4, vertical: 4),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          child: Text(
+                            'Forgot Password?',
+                            style: TextStyle(
+                              color: primaryColor,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                    SizedBox(height: _isSignUp ? 40 : 24),
+
+                    // Sign In / Sign Up Button — keeps its size while loading
+                    // (the old swap to a lone spinner shifted the whole
+                    // layout mid-submit).
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed:
+                            _isLoading ? null : (_isSignUp ? _signUp : _signIn),
+                        child: _isLoading
+                            ? const Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2),
+                                  ),
+                                  SizedBox(width: 12),
+                                  Text('Please wait...'),
+                                ],
+                              )
+                            : Text(_isSignUp ? 'Create Account' : 'Sign In'),
                       ),
                     ),
-                  ),
+                  ],
                 ),
-              ],
-              SizedBox(height: _isSignUp ? 40 : 24),
+              ),
 
-              // Sign In / Sign Up Button
-              if (_isLoading)
-                const Center(child: CircularProgressIndicator())
-              else
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: _isSignUp ? _signUp : _signIn,
-                    style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 18),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                    child: Text(_isSignUp ? 'Create Account' : 'Sign In'),
-                  ),
-                ),
               const SizedBox(height: 24),
 
               // Toggle between Sign In / Sign Up
@@ -369,16 +434,16 @@ class VerificationScreen extends StatelessWidget {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(
+              Icon(
                 Icons.mark_email_read,
                 size: 80,
-                color: Colors.green,
+                color: AppSemanticColors.positive(context),
               ),
               const SizedBox(height: 24),
               Text(
                 'Sign up successful!',
                 style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                      color: Colors.green,
+                      color: AppSemanticColors.positive(context),
                       fontWeight: FontWeight.bold,
                     ),
                 textAlign: TextAlign.center,
@@ -539,8 +604,11 @@ class _ForgotPasswordSheetState extends State<_ForgotPasswordSheet> {
         Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Password reset successfully! You can now sign in.'),
-            backgroundColor: Colors.green,
+            content: Text(
+              'Password reset successfully! You can now sign in.',
+              style: TextStyle(color: AppSemanticColors.onPositiveFill),
+            ),
+            backgroundColor: AppSemanticColors.positiveFill,
           ),
         );
       }
@@ -656,13 +724,14 @@ class _ForgotPasswordSheetState extends State<_ForgotPasswordSheet> {
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
-                        color: Colors.green.withValues(alpha: 0.12),
+                        color: AppSemanticColors.positive(context)
+                            .withValues(alpha: 0.12),
                         shape: BoxShape.circle,
                       ),
-                      child: const Icon(
+                      child: Icon(
                         Icons.mark_email_read_outlined,
                         size: 48,
-                        color: Colors.green,
+                        color: AppSemanticColors.positive(context),
                       ),
                     ),
                     const SizedBox(height: 16),
@@ -670,7 +739,7 @@ class _ForgotPasswordSheetState extends State<_ForgotPasswordSheet> {
                       'Instructions Sent!',
                       style: theme.textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.bold,
-                        color: Colors.green,
+                        color: AppSemanticColors.positive(context),
                       ),
                     ),
                     const SizedBox(height: 8),
@@ -921,8 +990,11 @@ class _SetNewPasswordSheetState extends State<_SetNewPasswordSheet> {
         Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Password updated successfully! Welcome back.'),
-            backgroundColor: Colors.green,
+            content: Text(
+              'Password updated successfully! Welcome back.',
+              style: TextStyle(color: AppSemanticColors.onPositiveFill),
+            ),
+            backgroundColor: AppSemanticColors.positiveFill,
           ),
         );
         Navigator.pushReplacementNamed(context, '/home');
@@ -1039,8 +1111,8 @@ class _SetNewPasswordSheetState extends State<_SetNewPasswordSheet> {
                 prefixIcon: const Icon(Icons.lock_outline),
                 suffixIcon: IconButton(
                   icon: Icon(_obscureNewPassword
-                        ? Icons.visibility_off
-                        : Icons.visibility),
+                      ? Icons.visibility_off
+                      : Icons.visibility),
                   onPressed: () => setState(
                       () => _obscureNewPassword = !_obscureNewPassword),
                 ),
@@ -1059,10 +1131,10 @@ class _SetNewPasswordSheetState extends State<_SetNewPasswordSheet> {
                 prefixIcon: const Icon(Icons.lock_outline),
                 suffixIcon: IconButton(
                   icon: Icon(_obscureConfirmPassword
-                        ? Icons.visibility_off
-                        : Icons.visibility),
-                  onPressed: () => setState(() =>
-                      _obscureConfirmPassword = !_obscureConfirmPassword),
+                      ? Icons.visibility_off
+                      : Icons.visibility),
+                  onPressed: () => setState(
+                      () => _obscureConfirmPassword = !_obscureConfirmPassword),
                 ),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(8),

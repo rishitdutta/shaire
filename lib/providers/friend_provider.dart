@@ -1,7 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../database/payment.dart';
+import '../services/data_cache.dart';
 import '../services/logger_service.dart';
+import '../services/realtime_service.dart';
 import '../services/custom_friend_balance_service.dart';
 
 class FriendProvider with ChangeNotifier {
@@ -51,11 +55,13 @@ class FriendProvider with ChangeNotifier {
         final friendPaid = (e['friend_paid'] as num? ?? 0).toDouble();
 
         if (youPaid > 0 && friendShare > 0) {
-          final coverage = amount > 0 ? (youPaid / amount).clamp(0.0, 1.0) : 1.0;
+          final coverage =
+              amount > 0 ? (youPaid / amount).clamp(0.0, 1.0) : 1.0;
           expensesYouAreOwed += friendShare * coverage;
         }
         if (friendPaid > 0 && yourShare > 0) {
-          final coverage = amount > 0 ? (friendPaid / amount).clamp(0.0, 1.0) : 1.0;
+          final coverage =
+              amount > 0 ? (friendPaid / amount).clamp(0.0, 1.0) : 1.0;
           expensesYouOwe += yourShare * coverage;
         }
       }
@@ -71,7 +77,8 @@ class FriendProvider with ChangeNotifier {
         }
       }
 
-      final net = (expensesYouAreOwed - expensesYouOwe) + (paidToFriend - receivedFromFriend);
+      final net = (expensesYouAreOwed - expensesYouOwe) +
+          (paidToFriend - receivedFromFriend);
       final bal = {
         'youOwe': net < 0 ? net.abs() : 0.0,
         'youAreOwed': net > 0 ? net : 0.0,
@@ -86,7 +93,19 @@ class FriendProvider with ChangeNotifier {
     }
   }
 
-  Future<void> fetchFriendsAndRequests() async {
+  static const String _cacheKey = 'friends_and_requests';
+
+  /// Cached list load — `force` only after real mutations/pull-to-refresh.
+  Future<void> fetchFriendsAndRequests({bool force = false}) async {
+    await DataCache.instance.fetch(
+      _cacheKey,
+      ttl: const Duration(seconds: 45),
+      force: force,
+      fetch: _fetchFriendsAndRequestsFromNetwork,
+    );
+  }
+
+  Future<void> _fetchFriendsAndRequestsFromNetwork() async {
     if (currentUserId == null) return;
 
     _isLoading = true;
@@ -124,14 +143,16 @@ class FriendProvider with ChangeNotifier {
             .select('id, name, linked_user_id')
             .eq('user_id', currentUserId!);
 
-        customFriends = (customRes as List).map<Map<String, dynamic>>((c) => {
-          'id': c['id'].toString(),
-          'username': null,
-          'full_name': c['name'],
-          'avatar_url': null,
-          'is_custom': true,
-          'linked_user_id': c['linked_user_id']?.toString(),
-        }).toList();
+        customFriends = (customRes as List)
+            .map<Map<String, dynamic>>((c) => {
+                  'id': c['id'].toString(),
+                  'username': null,
+                  'full_name': c['name'],
+                  'avatar_url': null,
+                  'is_custom': true,
+                  'linked_user_id': c['linked_user_id']?.toString(),
+                })
+            .toList();
       } catch (e) {
         LoggerService.warning('Custom friends table query: $e');
       }
@@ -242,7 +263,8 @@ class FriendProvider with ChangeNotifier {
       });
 
       // 4. Refresh data
-      await fetchFriendsAndRequests(); // This handles loading state and notifyListeners
+      await fetchFriendsAndRequests(
+          force: true); // This handles loading state and notifyListeners
     } catch (e) {
       LoggerService.error("Error sending friend request", e);
       _isLoading = false; // Ensure loading is reset on error
@@ -279,7 +301,7 @@ class FriendProvider with ChangeNotifier {
       LoggerService.debug("Notified listeners");
 
       await Future.delayed(const Duration(milliseconds: 300));
-      fetchFriendsAndRequests();
+      fetchFriendsAndRequests(force: true);
     } catch (e, st) {
       LoggerService.error("Failed to respond", e, st);
       rethrow;
@@ -314,7 +336,7 @@ class FriendProvider with ChangeNotifier {
         'isGroup': false,
       };
 
-      await fetchFriendsAndRequests();
+      await fetchFriendsAndRequests(force: true);
       return newFriend;
     } catch (e) {
       LoggerService.error("Error adding custom friend", e);
@@ -374,7 +396,7 @@ class FriendProvider with ChangeNotifier {
         }).eq('id', existingFriendship['id']);
       }
 
-      await fetchFriendsAndRequests();
+      await fetchFriendsAndRequests(force: true);
     } catch (e) {
       LoggerService.error("Error linking custom friend", e);
       _isLoading = false;
@@ -387,7 +409,7 @@ class FriendProvider with ChangeNotifier {
     if (currentUserId == null) throw Exception("Not logged in");
     try {
       await _supabase.from('custom_friends').delete().eq('id', customFriendId);
-      await fetchFriendsAndRequests();
+      await fetchFriendsAndRequests(force: true);
     } catch (e) {
       LoggerService.error("Error deleting custom friend", e);
       rethrow;
@@ -401,11 +423,9 @@ class FriendProvider with ChangeNotifier {
       return;
     }
     try {
-      await _supabase
-          .from('friendships')
-          .delete()
-          .or('and(user_id_1.eq.$currentUserId,user_id_2.eq.$friendId),and(user_id_1.eq.$friendId,user_id_2.eq.$currentUserId)');
-      await fetchFriendsAndRequests();
+      await _supabase.from('friendships').delete().or(
+          'and(user_id_1.eq.$currentUserId,user_id_2.eq.$friendId),and(user_id_1.eq.$friendId,user_id_2.eq.$currentUserId)');
+      await fetchFriendsAndRequests(force: true);
     } catch (e) {
       LoggerService.error("Error deleting friend", e);
       rethrow;
@@ -417,9 +437,8 @@ class FriendProvider with ChangeNotifier {
     try {
       await _supabase
           .from('custom_friends')
-          .update({'name': newName.trim()})
-          .eq('id', customFriendId);
-      await fetchFriendsAndRequests();
+          .update({'name': newName.trim()}).eq('id', customFriendId);
+      await fetchFriendsAndRequests(force: true);
     } catch (e) {
       LoggerService.error("Error renaming custom friend", e);
       rethrow;
@@ -427,7 +446,8 @@ class FriendProvider with ChangeNotifier {
   }
 
   /// Fetch full friend profile, shared expenses, payments, and pairwise balances
-  Future<Map<String, dynamic>> fetchFriendDetailsAndSharedData(dynamic friendId) async {
+  Future<Map<String, dynamic>> fetchFriendDetailsAndSharedData(
+      dynamic friendId) async {
     final userId = currentUserId;
     if (userId == null) throw Exception("Not logged in");
 
@@ -587,11 +607,13 @@ class FriendProvider with ChangeNotifier {
           'friend_paid': ce['paid_by_you'] != true
               ? (ce['total_amount'] as num?)?.toDouble() ?? 0.0
               : 0.0,
+          'is_settlement': ce['is_settlement'] == true,
         });
       }
     }
 
-    final net = (expensesYouAreOwed - expensesYouOwe) + (paidToFriend - receivedFromFriend);
+    final net = (expensesYouAreOwed - expensesYouOwe) +
+        (paidToFriend - receivedFromFriend);
     final youAreOwed = net > 0 ? net : 0.0;
     final youOwe = net < 0 ? net.abs() : 0.0;
 
@@ -609,5 +631,30 @@ class FriendProvider with ChangeNotifier {
       'youOwe': youOwe,
     };
   }
-}
 
+  // ── Realtime invalidation ────────────────────────────────────────────────
+
+  StreamSubscription<String>? _realtimeSub;
+
+  FriendProvider() {
+    _realtimeSub = RealtimeService.instance.changes.listen((table) {
+      if (const {
+        'friendships',
+        'custom_friends',
+        'profiles',
+        'balances',
+        'payments',
+        'expenses',
+        'expense_participants',
+      }.contains(table)) {
+        fetchFriendsAndRequests(force: true);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _realtimeSub?.cancel();
+    super.dispose();
+  }
+}

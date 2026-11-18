@@ -60,7 +60,8 @@ class _LinkFriendDialogState extends State<LinkFriendDialog> {
     });
 
     try {
-      await widget.friendProvider.linkCustomFriend(widget.customFriendId, input);
+      await widget.friendProvider
+          .linkCustomFriend(widget.customFriendId, input);
       if (mounted) {
         Navigator.pop(context, true);
         ScaffoldMessenger.of(context).showSnackBar(
@@ -71,7 +72,8 @@ class _LinkFriendDialogState extends State<LinkFriendDialog> {
       if (mounted) {
         setState(() {
           _isSubmitting = false;
-          _errorMessage = e.toString().replaceFirst(RegExp(r'^Exception:\s*'), '');
+          _errorMessage =
+              e.toString().replaceFirst(RegExp(r'^Exception:\s*'), '');
         });
       }
     }

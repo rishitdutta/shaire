@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'screens/home_screen.dart';
 import 'screens/groups_screen.dart';
 import 'screens/add_expense_screen.dart';
@@ -18,7 +19,14 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'screens/auth_screen.dart';
 import 'screens/complete_profile_screen.dart';
 import 'providers/friend_provider.dart';
+import 'database/notifications.dart';
+import 'services/realtime_service.dart';
+import 'widgets/notifications_sheet.dart';
 import 'services/logger_service.dart';
+
+/// Breakpoint (logical px) at which the shell switches from the phone bottom
+/// bar to a tablet/desktop navigation rail.
+const double kWideLayoutBreakpoint = 720;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -41,6 +49,9 @@ Future<void> main() async {
     url: supabaseUrl,
     anonKey: supabaseAnonKey,
   );
+
+  // Table-change broadcasts keep provider caches honest across devices.
+  RealtimeService.instance.start();
 
   runApp(
     MultiProvider(
@@ -71,14 +82,12 @@ class MyApp extends StatelessWidget {
           theme: AppTheme.lightTheme,
           darkTheme: AppTheme.darkTheme,
           themeMode: themeNotifier.themeMode,
-          // home: const SplashScreen(), // Entry point is splash screen
           debugShowCheckedModeBanner: false,
           navigatorObservers: [routeObserver],
           initialRoute: '/',
           routes: {
             '/': (context) => const SplashScreen(), // Root route for redirects
             '/landing': (context) => const LandingScreen(),
-            //'/auth': (context) => const AuthScreen(isSignUp: false), // Fixed: providing default value
             '/home': (context) => const MainScreen(),
           },
           onGenerateRoute: (settings) {
@@ -103,73 +112,79 @@ class SplashScreen extends StatefulWidget {
   State<SplashScreen> createState() => _SplashScreenState();
 }
 
-class _SplashScreenState extends State<SplashScreen> {
+class _SplashScreenState extends State<SplashScreen>
+    with SingleTickerProviderStateMixin {
+  static const _minVisibleDuration = Duration(milliseconds: 350);
+
+  late final AnimationController _introController;
+
   @override
   void initState() {
     super.initState();
-
-    /* // Initialize user provider
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      Provider.of<UserProvider>(context, listen: false).initialize();
-    }); */
-
+    _introController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 450),
+    )..forward();
     _checkAuthAndNavigate();
   }
 
-  Future<void> _checkAuthAndNavigate() async {
-    // Use a shorter delay for better UX
-    await Future.delayed(const Duration(milliseconds: 1500));
+  @override
+  void dispose() {
+    _introController.dispose();
+    super.dispose();
+  }
 
+  Future<void> _checkAuthAndNavigate() async {
+    final start = DateTime.now();
+
+    // Kick off the auth work immediately — no artificial delay before it.
     final session = Supabase.instance.client.auth.currentSession;
     final user = Supabase.instance.client.auth.currentUser;
 
-    if (!mounted) return; // Check if widget is still mounted
+    String? targetRoute;
+    Object? targetArguments;
+    var targetIsNamed = true;
 
-    // Clear navigation stack and go to appropriate screen
     if (session == null) {
-      Navigator.of(context)
-          .pushNamedAndRemoveUntil('/landing', (route) => false);
+      targetRoute = '/landing';
     } else if (user?.emailConfirmedAt == null) {
-      // Email not verified, go to Auth screen (which should show login)
-      // Or potentially a dedicated "Please Verify Email" screen
-      Navigator.of(context).pushNamedAndRemoveUntil('/auth', (route) => false,
-          arguments: false); // Explicitly go to login
+      targetRoute = '/auth';
+      targetArguments = false;
     } else {
-      // Logged in and email verified, check profile completion
       try {
-        // Use UserProvider to get profile status
         final userProvider = Provider.of<UserProvider>(context, listen: false);
-        // Fetch profile if not already loaded (getUserProfile handles caching)
         final profile = await userProvider.getUserProfile();
-
-        if (!mounted) return; // Check again after await
-
         final bool isProfileComplete = profile['profile_complete'] ?? false;
-
         if (isProfileComplete) {
-          // Profile complete, go home
-          Navigator.of(context)
-              .pushNamedAndRemoveUntil('/home', (route) => false);
+          targetRoute = '/home';
         } else {
-          // Profile incomplete, go to complete profile screen
-          Navigator.of(context).pushAndRemoveUntil(
-            MaterialPageRoute(
-                builder: (context) => const CompleteProfileScreen()),
-            (route) => false,
-          );
+          targetIsNamed = false;
         }
       } catch (e) {
-        // Handle error fetching profile (e.g., show error message or go to login)
         LoggerService.error("Error fetching profile in SplashScreen: $e");
-        if (mounted) {
-          // Option: Go to login on error
-          Navigator.of(context).pushNamedAndRemoveUntil(
-              '/auth', (route) => false,
-              arguments: false);
-          // Option: Show a persistent error (less ideal for splash)
-          // ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error loading profile.")));
-        }
+        targetRoute = '/auth';
+        targetArguments = false;
       }
+    }
+
+    // Keep the brand frame visible for a beat to avoid a flash, but never
+    // block on a fixed timer like the old 1500 ms delay did.
+    final elapsed = DateTime.now().difference(start);
+    if (elapsed < _minVisibleDuration) {
+      await Future.delayed(_minVisibleDuration - elapsed);
+    }
+
+    if (!mounted) return;
+
+    if (targetIsNamed) {
+      Navigator.of(context).pushNamedAndRemoveUntil(
+          targetRoute!, (route) => false,
+          arguments: targetArguments);
+    } else {
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (context) => const CompleteProfileScreen()),
+        (route) => false,
+      );
     }
   }
 
@@ -178,37 +193,55 @@ class _SplashScreenState extends State<SplashScreen> {
     final primaryColor = Theme.of(context).colorScheme.primary;
 
     return Scaffold(
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Spacer(),
-            // Logo in center
-            SvgPicture.asset(
-              'assets/images/logo.svg',
-              height: 160,
-              width: 160,
-            ),
-            const SizedBox(height: 24),
-            // "Shaire" text logo
-            SvgPicture.asset(
-              'assets/images/logo_text.svg',
-              height: 50,
-              colorFilter: ColorFilter.mode(
-                primaryColor,
-                BlendMode.srcIn,
+      body: DecoratedBox(
+        // Flat brand surface — no gradient.
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surface,
+        ),
+        child: SafeArea(
+          child: Center(
+            child: FadeTransition(
+              opacity: CurvedAnimation(
+                parent: _introController,
+                curve: Curves.easeOut,
+              ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Spacer(),
+                  // Logo in center
+                  SvgPicture.asset(
+                    'assets/images/logo.svg',
+                    height: 160,
+                    width: 160,
+                  ),
+                  const SizedBox(height: 24),
+                  // "Shaire" text logo
+                  SvgPicture.asset(
+                    'assets/images/logo_text.svg',
+                    height: 50,
+                    colorFilter: ColorFilter.mode(
+                      primaryColor,
+                      BlendMode.srcIn,
+                    ),
+                  ),
+                  const Spacer(),
+                  // Loader at the bottom
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 64.0),
+                    child: SizedBox(
+                      width: 28,
+                      height: 28,
+                      child: CircularProgressIndicator(
+                        color: primaryColor,
+                        strokeWidth: 3,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-            const Spacer(),
-            // Loader at the bottom
-            Padding(
-              padding: const EdgeInsets.only(bottom: 80.0),
-              child: CircularProgressIndicator(
-                color: primaryColor,
-                strokeWidth: 3,
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -222,49 +255,126 @@ class MainScreen extends StatefulWidget {
   State<MainScreen> createState() => _MainScreenState();
 }
 
+/// One tab entry of the phone bottom bar. Replaces the old raw-IconButton row
+/// which had tiny (40 px) tap targets, no indicator and a hidden third
+/// button with a null icon.
+class _BottomNavDestination extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _BottomNavDestination({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final foreground = selected
+        ? colorScheme.onPrimaryContainer
+        : colorScheme.onSurfaceVariant;
+
+    return Expanded(
+      child: Semantics(
+        button: true,
+        selected: selected,
+        label: label,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  curve: Curves.easeOut,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: selected
+                        ? colorScheme.primaryContainer
+                        : Colors.transparent,
+                    borderRadius: BorderRadius.circular(100),
+                  ),
+                  child: Icon(icon, size: 24, color: foreground),
+                ),
+                const SizedBox(height: 2),
+                AnimatedDefaultTextStyle(
+                  duration: const Duration(milliseconds: 200),
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                    color: foreground,
+                  ),
+                  child:
+                      Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _MainScreenState extends State<MainScreen> {
   int _selectedIndex = 0;
-
-  // Initialize directly instead of using late
-  final List<Widget> _screens = [
-    const HomeScreen(),
-    const GroupsScreen(),
-    const SizedBox(), // Placeholder for FAB navigation
-    const ExpensesScreen(),
-    const ProfileScreen(),
-  ];
+  int _unreadNotifications = 0;
 
   @override
   void initState() {
     super.initState();
-    // Remove the initialization here
+    _refreshUnreadCount();
   }
 
-  // Screen titles map (for centered title)
-  final Map<int, String> _screenTitles = {
+  Future<void> _refreshUnreadCount() async {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) return;
+    final count = await NotificationService().unreadCountForUser(user.id);
+    if (mounted) setState(() => _unreadNotifications = count);
+  }
+
+  // Screen order matches the four tab destinations; index 2 in the old
+  // (5-slot) scheme was just a placeholder for the FAB and is gone now.
+  static const List<Widget> _screens = [
+    HomeScreen(),
+    GroupsScreen(),
+    ExpensesScreen(),
+    ProfileScreen(),
+  ];
+
+  static const List<_TabSpec> _tabs = [
+    _TabSpec('Shaire', Icons.home_outlined, Icons.home),
+    _TabSpec('Groups', Icons.group_outlined, Icons.group),
+    _TabSpec('Expenses', Icons.receipt_long_outlined, Icons.receipt_long),
+    _TabSpec('Profile', Icons.person_outline, Icons.person),
+  ];
+
+  static const Map<int, String> _screenTitles = {
     0: 'Shaire',
-    1: 'Groups',
-    3: 'Expenses',
-    4: 'Profile',
+    2: 'Expenses',
+    3: 'Profile',
   };
 
-  // In MainScreen class, update the _onItemTapped method:
+  /// Maps bottom-bar indices to IndexedStack children (the FAB no longer
+  /// occupies a slot, but keeps the docked middle position visually).
+  int get _stackIndex => _selectedIndex;
+
+  void _openAddExpense() {
+    // Returning to the shell refreshes Home and Expenses through their
+    // own RouteAware didPopNext hooks — no duplicate fetch needed here.
+    Navigator.push(context,
+        MaterialPageRoute(builder: (context) => const AddExpenseScreen()));
+  }
 
   void _onItemTapped(int index) {
-    if (index == 2) {
-      // Navigate to add expense screen
-      Navigator.push(context,
-              MaterialPageRoute(builder: (context) => const AddExpenseScreen()))
-          .then((_) {
-        // Refresh expenses data when returning from the add expense screen
-        if (mounted && _selectedIndex == 3) {
-          // Expenses tab
-          Provider.of<ExpenseProvider>(context, listen: false).fetchExpenses();
-        }
-      });
-      return;
-    }
-
+    HapticFeedback.selectionClick();
     setState(() {
       _selectedIndex = index;
     });
@@ -272,8 +382,17 @@ class _MainScreenState extends State<MainScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Groups screen has its own AppBar, so we conditionally render the main AppBar
+    final size = MediaQuery.sizeOf(context);
+    final isWide = size.width >= kWideLayoutBreakpoint;
+
+    // Groups screen has its own AppBar, so we conditionally render the main
+    // AppBar.
     final bool isGroupsScreen = _selectedIndex == 1;
+
+    final body = IndexedStack(
+      index: _stackIndex,
+      children: _screens,
+    );
 
     return Scaffold(
       // Only show AppBar if NOT on the Groups screen
@@ -292,132 +411,148 @@ class _MainScreenState extends State<MainScreen> {
               ),
               centerTitle: true,
               actions: [
-                Padding(
-                  padding: const EdgeInsets.only(
-                      right: 16, top: 8, bottom: 8, left: 8),
-                  child: IconButton(
-                    icon: Icon(
-                      _selectedIndex == 0
-                          ? Icons.notifications
-                          : _selectedIndex == 4
-                              ? Icons.settings
-                              : null,
+                // One meaningful action per tab instead of an invisible
+                // null-icon button on the other two.
+                if (_selectedIndex == 0)
+                  IconButton(
+                    icon: Badge(
+                      isLabelVisible: _unreadNotifications > 0,
+                      label: Text(_unreadNotifications > 99
+                          ? '99+'
+                          : '$_unreadNotifications'),
+                      child: const Icon(Icons.notifications_none),
                     ),
-                    onPressed: () {
-                      if (_selectedIndex == 0) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Notifications coming soon'),
-                            behavior: SnackBarBehavior.floating,
-                          ),
-                        );
-                      } else if (_selectedIndex == 4) {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => const SettingsScreen(),
-                          ),
-                        );
-                      }
+                    tooltip: 'Notifications',
+                    onPressed: () async {
+                      await NotificationsSheet.show(context);
+                      if (!mounted) return;
+                      _refreshUnreadCount();
+                      // A "mark all read" may have changed what Home shows.
                     },
-                    style: _selectedIndex != 0 && _selectedIndex != 4
-                        ? ButtonStyle(
-                            foregroundColor:
-                                WidgetStateProperty.all(Colors.transparent),
-                          )
-                        : null,
+                  )
+                else if (_selectedIndex == 3)
+                  IconButton(
+                    icon: const Icon(Icons.settings_outlined),
+                    tooltip: 'Settings',
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const SettingsScreen(),
+                        ),
+                      );
+                    },
+                  ),
+              ],
+            ),
+      body: isWide
+          ? Row(
+              children: [
+                _buildRail(context),
+                const VerticalDivider(width: 1, thickness: 1),
+                Expanded(
+                  // Cap content width on very large screens for readability.
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 840),
+                      child: body,
+                    ),
                   ),
                 ),
               ],
+            )
+          : body,
+      // On phones the FAB docks in the notch; on wide layouts it floats at
+      // the end of the content area.
+      floatingActionButton: isWide
+          ? null
+          : FloatingActionButton(
+              onPressed: _openAddExpense,
+              tooltip: 'Add Expense',
+              child: const Icon(Icons.add),
             ),
-      body: IndexedStack(
-        index: _selectedIndex == 2 ? 0 : _selectedIndex,
-        children: _screens,
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => _onItemTapped(2),
-        tooltip: 'Add Expense',
-        child: const Icon(Icons.add, color: Colors.white),
-      ),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
-      bottomNavigationBar: BottomAppBar(
-        shape: const CircularNotchedRectangle(),
-        notchMargin: 12.0,
-        child: SizedBox(
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              // Left side items
-              Expanded(
+      bottomNavigationBar: isWide
+          ? null
+          : BottomAppBar(
+              shape: const CircularNotchedRectangle(),
+              notchMargin: 10,
+              padding: EdgeInsets.zero,
+              child: SizedBox(
+                height: 64,
                 child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
-                    // Shaire button
-                    _buildNavItem(0, Icons.home, 'Shaire'),
-                    // Groups button
-                    _buildNavItem(1, Icons.group, 'Groups'),
+                    // Two tabs, the notched gap, two tabs.
+                    for (final i in const [0, 1])
+                      _BottomNavDestination(
+                        icon: _selectedIndex == i
+                            ? _tabs[i].selectedIcon
+                            : _tabs[i].icon,
+                        label: _tabs[i].label,
+                        selected: _selectedIndex == i,
+                        onTap: () => _onItemTapped(i),
+                      ),
+                    const SizedBox(width: 72),
+                    for (final i in const [2, 3])
+                      _BottomNavDestination(
+                        icon: _selectedIndex == i
+                            ? _tabs[i].selectedIcon
+                            : _tabs[i].icon,
+                        label: _tabs[i].label,
+                        selected: _selectedIndex == i,
+                        onTap: () => _onItemTapped(i),
+                      ),
                   ],
                 ),
               ),
+            ),
+    );
+  }
 
-              // Space for the FAB
-              const SizedBox(width: 50),
-
-              // Right side items
-              Expanded(
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    // Expenses button
-                    _buildNavItem(3, Icons.receipt_long, 'Expenses'),
-                    // Profile button
-                    _buildNavItem(4, Icons.person, 'Profile'),
-                  ],
-                ),
-              ),
-            ],
+  Widget _buildRail(BuildContext context) {
+    return NavigationRail(
+      onDestinationSelected: _onItemTapped,
+      selectedIndex: _selectedIndex,
+      labelType: NavigationRailLabelType.all,
+      leading: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        child: Column(
+          children: [
+            SvgPicture.asset('assets/images/logo.svg', height: 44, width: 44),
+            const SizedBox(height: 24),
+          ],
+        ),
+      ),
+      trailing: Expanded(
+        child: Align(
+          alignment: Alignment.bottomCenter,
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 24),
+            child: FloatingActionButton(
+              heroTag: 'railAddExpense',
+              onPressed: _openAddExpense,
+              tooltip: 'Add Expense',
+              child: const Icon(Icons.add),
+            ),
           ),
         ),
       ),
+      destinations: [
+        for (final tab in _tabs)
+          NavigationRailDestination(
+            icon: Icon(tab.icon),
+            selectedIcon: Icon(tab.selectedIcon),
+            label: Text(tab.label),
+          ),
+      ],
     );
   }
+}
 
-  // Helper method to build nav items with consistent style and reduced size
-  Widget _buildNavItem(int index, IconData icon, String label) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 0),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          IconButton(
-            icon: Icon(
-              icon,
-              color: _selectedIndex == index
-                  ? Theme.of(context).colorScheme.primary
-                  : null,
-              size: 28, // Explicit size
-            ),
-            onPressed: () => _onItemTapped(index),
-            padding: EdgeInsets.zero,
-            visualDensity: VisualDensity.compact,
-            constraints: const BoxConstraints(
-              minWidth: 40,
-              minHeight: 40,
-            ),
-          ),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 10,
-              color: _selectedIndex == index
-                  ? Theme.of(context).colorScheme.primary
-                  : Theme.of(context).textTheme.bodySmall?.color,
-            ),
-            textAlign: TextAlign.center,
-          ),
-        ],
-      ),
-    );
-  }
+class _TabSpec {
+  final String label;
+  final IconData icon;
+  final IconData selectedIcon;
+  const _TabSpec(this.label, this.icon, this.selectedIcon);
 }

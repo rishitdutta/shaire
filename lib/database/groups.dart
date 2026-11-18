@@ -51,7 +51,7 @@ class GroupService {
           .from('groups')
           .select('*')
           .eq('id', id)
-          .single();  // Fetch single row
+          .single(); // Fetch single row
 
       return Group.fromJson(response);
     } catch (error) {
@@ -75,10 +75,7 @@ class GroupService {
   /// Update an existing group
   Future<bool> updateGroup(Group group) async {
     try {
-      await supabase
-          .from('groups')
-          .update(group.toJson())
-          .eq('id', group.id);
+      await supabase.from('groups').update(group.toJson()).eq('id', group.id);
       LoggerService.info('Group updated successfully');
       return true;
     } catch (error) {

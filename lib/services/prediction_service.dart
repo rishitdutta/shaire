@@ -81,7 +81,8 @@ class PredictionService {
         if (attempt >= _maxRetries) rethrow;
         await Future.delayed(Duration(seconds: attempt * 2));
       } on http.ClientException catch (e) {
-        LoggerService.warning('Client connection error on attempt $attempt: $e');
+        LoggerService.warning(
+            'Client connection error on attempt $attempt: $e');
         if (attempt >= _maxRetries) rethrow;
         await Future.delayed(Duration(seconds: attempt * 2));
       } on TimeoutException catch (e) {

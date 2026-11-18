@@ -125,7 +125,8 @@ class _EditTagsDialogState extends State<EditTagsDialog> {
                         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
                       onPressed: _addTag,
-                      child: const Icon(Icons.add, size: 20, color: Colors.white),
+                      child:
+                          const Icon(Icons.add, size: 20, color: Colors.white),
                     ),
                   ),
                 ],

@@ -46,15 +46,23 @@ class ShaireWidgetbookApp extends StatelessWidget {
                               children: [
                                 Text(
                                   'Press & Hold to Test Modal',
-                                  style: Theme.of(ctx).textTheme.titleLarge?.copyWith(
+                                  style: Theme.of(ctx)
+                                      .textTheme
+                                      .titleLarge
+                                      ?.copyWith(
                                         fontWeight: FontWeight.bold,
                                       ),
                                 ),
                                 const SizedBox(height: 8),
                                 Text(
                                   'Long-pressing turns the background translucent black and brings up friend actions + instant expense sheet.',
-                                  style: Theme.of(ctx).textTheme.bodyMedium?.copyWith(
-                                        color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                                  style: Theme.of(ctx)
+                                      .textTheme
+                                      .bodyMedium
+                                      ?.copyWith(
+                                        color: Theme.of(ctx)
+                                            .colorScheme
+                                            .onSurfaceVariant,
                                       ),
                                   textAlign: TextAlign.center,
                                 ),
@@ -63,7 +71,8 @@ class ShaireWidgetbookApp extends StatelessWidget {
                                   elevation: 0,
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(16),
-                                    side: BorderSide(color: Theme.of(ctx).dividerColor),
+                                    side: BorderSide(
+                                        color: Theme.of(ctx).dividerColor),
                                   ),
                                   child: ListTile(
                                     contentPadding: const EdgeInsets.symmetric(
@@ -85,9 +94,11 @@ class ShaireWidgetbookApp extends StatelessWidget {
                                     ),
                                     title: const Text(
                                       'Alice Johnson',
-                                      style: TextStyle(fontWeight: FontWeight.w600),
+                                      style: TextStyle(
+                                          fontWeight: FontWeight.w600),
                                     ),
-                                    subtitle: const Text('You get ₹150.00 • Hold to test'),
+                                    subtitle: const Text(
+                                        'You get ₹150.00 • Hold to test'),
                                     trailing: Icon(
                                       Icons.touch_app_outlined,
                                       color: Theme.of(ctx).colorScheme.primary,
@@ -119,7 +130,8 @@ class ShaireWidgetbookApp extends StatelessWidget {
                                     );
                                   },
                                   icon: const Icon(Icons.bolt),
-                                  label: const Text('Open Directly for Bob (Custom Friend)'),
+                                  label: const Text(
+                                      'Open Directly for Bob (Custom Friend)'),
                                 ),
                               ],
                             ),
@@ -201,12 +213,16 @@ class ShaireWidgetbookApp extends StatelessWidget {
                           children: [
                             Text(
                               'Quick Tags Manager',
-                              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .titleLarge
+                                  ?.copyWith(
                                     fontWeight: FontWeight.bold,
                                   ),
                             ),
                             const SizedBox(height: 8),
-                            const Text('Add, delete, or reorder tags with drag-and-drop.'),
+                            const Text(
+                                'Add, delete, or reorder tags with drag-and-drop.'),
                             const SizedBox(height: 24),
                             ElevatedButton.icon(
                               onPressed: () {
@@ -287,7 +303,8 @@ class _SplitOptionsDemoWrapper extends StatefulWidget {
   const _SplitOptionsDemoWrapper();
 
   @override
-  State<_SplitOptionsDemoWrapper> createState() => _SplitOptionsDemoWrapperState();
+  State<_SplitOptionsDemoWrapper> createState() =>
+      _SplitOptionsDemoWrapperState();
 }
 
 class _SplitOptionsDemoWrapperState extends State<_SplitOptionsDemoWrapper>
@@ -325,7 +342,8 @@ class _SplitOptionsDemoWrapperState extends State<_SplitOptionsDemoWrapper>
           constraints: const BoxConstraints(maxWidth: 500),
           child: Card(
             elevation: 2,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: SplitOptionsWidget(

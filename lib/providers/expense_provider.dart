@@ -1,7 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../database/expense.dart';
+import '../services/data_cache.dart';
 import '../services/logger_service.dart';
+import '../services/realtime_service.dart';
 
 class ExpenseProvider with ChangeNotifier {
   final SupabaseClient supabase = Supabase.instance.client;
@@ -19,8 +23,24 @@ class ExpenseProvider with ChangeNotifier {
   double get youOwe => _youOwe;
   String? get currentUserId => supabase.auth.currentUser?.id;
 
-  /// Fetch all expenses for the current user
-  Future<void> fetchExpenses() async {
+  static const String _cacheKey = 'expenses';
+  static const Duration _cacheTtl = Duration(seconds: 30);
+
+  /// Fetch all expenses involving the current user.
+  ///
+  /// Served from the in-memory [DataCache] when fresh (< 30 s) so switching
+  /// tabs never blocks on the network; pass `force: true` after a mutation or
+  /// an explicit pull-to-refresh.
+  Future<void> fetchExpenses({bool force = false}) async {
+    await DataCache.instance.fetch(
+      _cacheKey,
+      ttl: _cacheTtl,
+      force: force,
+      fetch: _fetchExpensesFromNetwork,
+    );
+  }
+
+  Future<void> _fetchExpensesFromNetwork() async {
     _isLoading = true;
     notifyListeners();
 
@@ -33,16 +53,49 @@ class ExpenseProvider with ChangeNotifier {
 
       LoggerService.info('Fetching expenses for user: ${user.id}');
 
-      final response = await supabase
+      // Expenses the user created…
+      final createdRes = await supabase
           .from('expenses')
           .select('*')
           .eq('created_by', user.id)
           .order('date', ascending: false);
 
-      LoggerService.debug('Fetched ${response.length} expenses');
+      // …plus expenses someone else created and included them in (previously
+      // missing entirely from this list!).
+      final myIds =
+          createdRes.map<int>((json) => (json['id'] as num).toInt()).toSet();
+
+      List<Map<String, dynamic>> sharedRows = [];
+      try {
+        final participantRows = await supabase
+            .from('expense_participants')
+            .select('expense_id')
+            .eq('user_id', user.id);
+        final sharedIds = participantRows
+            .map<int>((row) => (row['expense_id'] as num).toInt())
+            .where((id) => !myIds.contains(id))
+            .toList();
+        if (sharedIds.isNotEmpty) {
+          sharedRows = (await supabase
+                  .from('expenses')
+                  .select('*')
+                  .inFilter('id', sharedIds)
+                  .order('date', ascending: false))
+              .cast<Map<String, dynamic>>();
+        }
+      } catch (e) {
+        // Union failed (e.g. permissions on expense_participants) — the old
+        // created-only list is still better than nothing.
+        LoggerService.warning('Participant-expense union skipped: $e');
+      }
+
+      final combined = [...createdRes, ...sharedRows]
+        ..sort((a, b) => (b['date'] as String).compareTo(a['date'] as String));
+
+      LoggerService.debug('Fetched ${combined.length} expenses');
 
       _expenses =
-          response.map<Expense>((json) => Expense.fromJson(json)).toList();
+          combined.map<Expense>((json) => Expense.fromJson(json)).toList();
     } catch (error) {
       LoggerService.error('Error fetching expenses', error);
       _expenses = []; // Reset to empty list on error
@@ -52,8 +105,24 @@ class ExpenseProvider with ChangeNotifier {
     }
   }
 
-  /// Fetch expenses by group ID
-  Future<List<Expense>> fetchGroupExpenses(int groupId) async {
+  /// Fetch expenses by group ID (cached per group; `force` to bypass).
+  Future<List<Expense>> fetchGroupExpenses(int groupId,
+      {bool force = false}) async {
+    final key = 'group_expenses_$groupId';
+    await DataCache.instance.fetch(
+      key,
+      ttl: _cacheTtl,
+      force: force,
+      fetch: () async {
+        _groupExpenseCache[key] = await _fetchGroupExpensesFromNetwork(groupId);
+      },
+    );
+    return _groupExpenseCache[key] ?? const [];
+  }
+
+  final Map<String, List<Expense>> _groupExpenseCache = {};
+
+  Future<List<Expense>> _fetchGroupExpensesFromNetwork(int groupId) async {
     try {
       LoggerService.info('Fetching expenses for group: $groupId');
 
@@ -112,7 +181,7 @@ class ExpenseProvider with ChangeNotifier {
       _lastInsertedId = response['id'];
       LoggerService.info('Expense created with ID: $_lastInsertedId');
 
-      await fetchExpenses(); // Refresh the list after creation
+      await fetchExpenses(force: true); // Refresh the list after creation
       return true;
     } catch (error) {
       LoggerService.error('Error creating expense', error);
@@ -138,7 +207,7 @@ class ExpenseProvider with ChangeNotifier {
 
       LoggerService.info('Expense updated successfully');
 
-      await fetchExpenses(); // Refresh the list after update
+      await fetchExpenses(force: true); // Refresh the list after update
       return true;
     } catch (error) {
       LoggerService.error('Error updating expense', error);
@@ -162,6 +231,10 @@ class ExpenseProvider with ChangeNotifier {
       _expenses.removeWhere((expense) => expense.id == id);
       LoggerService.info('Expense deleted successfully');
 
+      // Balances change on delete too — make sure the next read is real.
+      DataCache.instance.invalidate(_cacheKey);
+      DataCache.instance.invalidate(_balanceCacheKey);
+
       return true;
     } catch (error) {
       LoggerService.error('Error deleting expense', error);
@@ -175,13 +248,28 @@ class ExpenseProvider with ChangeNotifier {
   /// Clear all expenses (optional helper)
   void clearExpenses() {
     _expenses = [];
+    _groupExpenseCache.clear();
+    DataCache.instance.invalidate(_cacheKey);
     notifyListeners();
   }
 
-  /// Fetch total balances (you owe / you are owed) for current user
-  Future<Map<String, double>> fetchUserOverallBalances() async {
+  static const String _balanceCacheKey = 'overall_balances';
+
+  /// Fetch total balances (you owe / you are owed) for current user.
+  Future<Map<String, double>> fetchUserOverallBalances(
+      {bool force = false}) async {
+    await DataCache.instance.fetch(
+      _balanceCacheKey,
+      ttl: _cacheTtl,
+      force: force,
+      fetch: _fetchOverallBalancesFromNetwork,
+    );
+    return {'youGet': _youGet, 'youOwe': _youOwe};
+  }
+
+  Future<void> _fetchOverallBalancesFromNetwork() async {
     final user = supabase.auth.currentUser;
-    if (user == null) return {'youGet': 0.0, 'youOwe': 0.0};
+    if (user == null) return;
 
     try {
       final balancesResponse = await supabase
@@ -231,10 +319,31 @@ class ExpenseProvider with ChangeNotifier {
       _youGet = getTotalAmount;
       _youOwe = oweTotalAmount;
       notifyListeners();
-      return {'youGet': _youGet, 'youOwe': _youOwe};
     } catch (e) {
       LoggerService.error('Error calculating overall balances', e);
-      return {'youGet': _youGet, 'youOwe': _youOwe};
     }
+  }
+
+  // ── Realtime: invalidate + refetch when any relevant table changes ──────
+
+  StreamSubscription<String>? _realtimeSub;
+
+  ExpenseProvider() {
+    _realtimeSub = RealtimeService.instance.changes.listen((table) {
+      if (const {'expenses', 'expense_participants', 'payments', 'balances'}
+          .contains(table)) {
+        DataCache.instance.invalidate(_cacheKey);
+        DataCache.instance.invalidate(_balanceCacheKey);
+        _groupExpenseCache.clear();
+        fetchExpenses(force: true);
+        fetchUserOverallBalances(force: true);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _realtimeSub?.cancel();
+    super.dispose();
   }
 }

@@ -59,7 +59,8 @@ class BalanceService {
           .maybeSingle();
 
       if (response == null) {
-        LoggerService.debug('No balance found between $fromUserId and $toUserId');
+        LoggerService.debug(
+            'No balance found between $fromUserId and $toUserId');
         return null;
       }
 
@@ -87,6 +88,15 @@ class BalanceService {
           .maybeSingle();
 
       if (existing == null) {
+        // A settlement (negative delta) that finds no existing row means
+        // there is nothing to reduce — inserting now would fabricate an
+        // inverted debt. Skip instead.
+        if (deltaAmount < 0) {
+          LoggerService.warning(
+              'adjustBalance: no existing row between $fromUserId/$toUserId, '
+              'skipping negative adjustment');
+          return;
+        }
         await supabase.from('balances').insert({
           'from_user_id': fromUserId,
           'to_user_id': toUserId,
@@ -152,4 +162,3 @@ class BalanceService {
     }
   }
 }
-

@@ -7,6 +7,11 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import '../widgets/receipt_scanner_section.dart';
 
+/// Mirrors the app palette (see `AppSemanticColors`): brand-derived green for
+/// amounts owed back to the payer, washed-out red for what they owe.
+const PdfColor _pdfBrandGreen = PdfColor.fromInt(0xFF477326);
+const PdfColor _pdfWashedRed = PdfColor.fromInt(0xFFB0554D);
+
 class PdfService {
   /// Generates the bill split PDF bytes
   static Future<Uint8List> generateSplitBillPdf({
@@ -307,7 +312,7 @@ class PdfService {
                           '${item.type == BillEntryType.discount ? "-" : ""}$displayCurrency${item.amount.toStringAsFixed(2)}',
                           alignRight: true,
                           color: item.type == BillEntryType.discount
-                              ? PdfColors.green700
+                              ? _pdfBrandGreen
                               : PdfColors.black,
                         ),
                       ],
@@ -329,7 +334,7 @@ class PdfService {
                       if (taxItems.isNotEmpty)
                         _buildSummaryRow('Taxes & Extra Charges', '+$displayCurrency${totalTaxes.toStringAsFixed(2)}'),
                       if (discountItems.isNotEmpty)
-                        _buildSummaryRow('Discounts', '-$displayCurrency${totalDiscounts.toStringAsFixed(2)}', color: PdfColors.green700),
+                        _buildSummaryRow('Discounts', '-$displayCurrency${totalDiscounts.toStringAsFixed(2)}', color: _pdfBrandGreen),
                       pw.Divider(color: PdfColors.grey400, thickness: 0.8),
                       _buildSummaryRow(
                         'Total',
@@ -386,10 +391,10 @@ class PdfService {
                   PdfColor netColor;
                   if (net > 0.01) {
                     netStatus = 'Gets $displayCurrency${net.toStringAsFixed(2)}';
-                    netColor = PdfColors.green700;
+                    netColor = _pdfBrandGreen;
                   } else if (net < -0.01) {
                     netStatus = 'Owes $displayCurrency${(-net).toStringAsFixed(2)}';
-                    netColor = PdfColors.red700;
+                    netColor = _pdfWashedRed;
                   } else {
                     netStatus = 'Settled';
                     netColor = PdfColors.grey700;

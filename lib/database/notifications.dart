@@ -118,4 +118,42 @@ class NotificationService {
       return false;
     }
   }
+
+  /// Recent notifications for a user, newest first. Throws so callers can
+  /// show a real error state instead of an empty "no notifications" lie.
+  Future<List<Notification>> fetchRecentForUser(String userId,
+      {int limit = 50}) async {
+    final rows = await supabase
+        .from('notifications')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', ascending: false)
+        .limit(limit);
+    return rows.map((json) => Notification.fromJson(json)).toList();
+  }
+
+  /// Count of unread notifications for the badge. Never throws — a failed
+  /// count simply hides the badge.
+  Future<int> unreadCountForUser(String userId) async {
+    try {
+      final count = await supabase
+          .from('notifications')
+          .count(CountOption.exact)
+          .eq('user_id', userId)
+          .eq('is_read', false);
+      return count;
+    } catch (error) {
+      LoggerService.warning('Error counting unread notifications: $error');
+      return 0;
+    }
+  }
+
+  /// Mark every unread notification for the user as read.
+  Future<void> markAllReadForUser(String userId) async {
+    await supabase
+        .from('notifications')
+        .update({'is_read': true})
+        .eq('user_id', userId)
+        .eq('is_read', false);
+  }
 }

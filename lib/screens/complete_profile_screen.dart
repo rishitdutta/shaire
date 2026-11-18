@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../providers/user_provider.dart';
 import '../providers/currency_provider.dart'; // For currency list
+import '../providers/user_provider.dart';
+import '../theme/theme.dart';
 
 class CompleteProfileScreen extends StatefulWidget {
   const CompleteProfileScreen({super.key});
@@ -163,7 +164,8 @@ class _CompleteProfileScreenState extends State<CompleteProfileScreen> {
                     padding: const EdgeInsets.only(top: 16),
                     child: Text(
                       _errorMessage!,
-                      style: const TextStyle(color: Colors.red),
+                      style:
+                          TextStyle(color: AppSemanticColors.negative(context)),
                       textAlign: TextAlign.center,
                     ),
                   ),

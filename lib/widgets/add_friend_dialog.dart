@@ -136,9 +136,8 @@ class _AddFriendDialogState extends State<AddFriendDialog> {
               labelText: _isNameOnly ? "Friend's Name" : "Username or Email",
               hintText:
                   _isNameOnly ? "e.g. Alex" : "e.g. alex or alex@gmail.com",
-              helperText: _isNameOnly
-                  ? "Quickly add now, link to account later"
-                  : null,
+              helperText:
+                  _isNameOnly ? "Quickly add now, link to account later" : null,
               errorText: _errorMessage,
             ),
           ),

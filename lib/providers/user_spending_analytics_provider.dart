@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import '../database/user_spending_analytics.dart';  // Import the model
+import '../database/user_spending_analytics.dart'; // Import the model
 import '../services/logger_service.dart';
 
 class AnalyticsProvider with ChangeNotifier {
@@ -62,15 +62,13 @@ class AnalyticsProvider with ChangeNotifier {
   /// Create a new spending analytics record
   Future<void> createAnalytics(UserSpendingAnalytics analytics) async {
     try {
-      await supabase
-          .from('user_spending_analytics')
-          .insert(analytics.toJson());
+      await supabase.from('user_spending_analytics').insert(analytics.toJson());
 
       await fetchAnalytics(
-        analytics.userId, 
-        analytics.month, 
+        analytics.userId,
+        analytics.month,
         analytics.year,
-      );  // Refresh the list after creation
+      ); // Refresh the list after creation
     } catch (error) {
       LoggerService.error('Error creating analytics: $error');
     }
@@ -85,10 +83,10 @@ class AnalyticsProvider with ChangeNotifier {
           .eq('id', analytics.id);
 
       await fetchAnalytics(
-        analytics.userId, 
-        analytics.month, 
+        analytics.userId,
+        analytics.month,
         analytics.year,
-      );  // Refresh the list after update
+      ); // Refresh the list after update
     } catch (error) {
       LoggerService.error('Error updating analytics: $error');
     }
@@ -97,10 +95,7 @@ class AnalyticsProvider with ChangeNotifier {
   /// Delete an analytics record by ID
   Future<void> deleteAnalytics(int id) async {
     try {
-      await supabase
-          .from('user_spending_analytics')
-          .delete()
-          .eq('id', id);
+      await supabase.from('user_spending_analytics').delete().eq('id', id);
 
       _analytics.removeWhere((analytics) => analytics.id == id);
       notifyListeners();

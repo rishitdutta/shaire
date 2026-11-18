@@ -2,10 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../providers/currency_provider.dart';
-import '../providers/friend_provider.dart';
 import '../providers/expense_provider.dart';
-import '../services/quick_tags_service.dart';
+import '../providers/friend_provider.dart';
 import '../services/quick_expense_service.dart';
+import '../services/quick_tags_service.dart';
+import '../theme/theme.dart';
 import 'edit_tags_dialog.dart';
 
 class FriendQuickActionModal extends StatefulWidget {
@@ -135,7 +136,7 @@ class _FriendQuickActionModalState extends State<FriendQuickActionModal> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Please enter an amount greater than 0'),
-          backgroundColor: Colors.red,
+          backgroundColor: AppSemanticColors.negativeFill,
         ),
       );
       return;
@@ -194,8 +195,11 @@ class _FriendQuickActionModalState extends State<FriendQuickActionModal> {
 
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Expense recorded! $statusText'),
-            backgroundColor: Colors.green,
+            content: Text(
+              'Expense recorded! $statusText',
+              style: const TextStyle(color: AppSemanticColors.onPositiveFill),
+            ),
+            backgroundColor: AppSemanticColors.positiveFill,
             duration: const Duration(seconds: 3),
           ),
         );
@@ -206,7 +210,7 @@ class _FriendQuickActionModalState extends State<FriendQuickActionModal> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Error recording expense: $e'),
-            backgroundColor: Colors.red,
+            backgroundColor: AppSemanticColors.negativeFill,
           ),
         );
       }
@@ -293,7 +297,8 @@ class _FriendQuickActionModalState extends State<FriendQuickActionModal> {
             TextField(
               controller: _amountController,
               focusNode: _amountFocusNode,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
               inputFormatters: [
                 FilteringTextInputFormatter.allow(RegExp(r'^\d+\.?\d{0,2}')),
               ],

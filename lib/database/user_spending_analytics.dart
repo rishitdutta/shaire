@@ -69,7 +69,8 @@ class UserSpendingAnalyticsService {
           .maybeSingle();
 
       if (response == null) {
-        LoggerService.warning('No analytics found for user: $userId, month: $month, year: $year');
+        LoggerService.warning(
+            'No analytics found for user: $userId, month: $month, year: $year');
         return null;
       }
 
@@ -84,9 +85,7 @@ class UserSpendingAnalyticsService {
   Future<bool> createUserSpendingAnalytics(
       UserSpendingAnalytics analytics) async {
     try {
-      await supabase
-          .from('user_spending_analytics')
-          .insert(analytics.toJson());
+      await supabase.from('user_spending_analytics').insert(analytics.toJson());
 
       LoggerService.info('User spending analytics created successfully');
       return true;
@@ -116,10 +115,7 @@ class UserSpendingAnalyticsService {
   /// Delete a spending analytics record by ID
   Future<bool> deleteUserSpendingAnalytics(int id) async {
     try {
-      await supabase
-          .from('user_spending_analytics')
-          .delete()
-          .eq('id', id);
+      await supabase.from('user_spending_analytics').delete().eq('id', id);
 
       LoggerService.info('User spending analytics deleted successfully');
       return true;

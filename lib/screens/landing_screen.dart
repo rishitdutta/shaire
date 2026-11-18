@@ -52,7 +52,7 @@ class LandingScreen extends StatelessWidget {
                   'Share Bills and manage\nexpenses with AI!',
                   style: Theme.of(context).textTheme.titleLarge?.copyWith(
                         height: 1.3,
-                        fontWeight: FontWeight.w200,
+                        fontWeight: FontWeight.w400,
                       ),
                   textAlign: TextAlign.center,
                 ),
@@ -73,9 +73,6 @@ class LandingScreen extends StatelessWidget {
                   },
                   style: ElevatedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 18),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
                   ),
                   child: const Text('Sign up with Email'),
                 ),

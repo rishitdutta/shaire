@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/user_provider.dart';
+import '../theme/theme.dart';
 
 class EditProfileScreen extends StatefulWidget {
   const EditProfileScreen({super.key});
@@ -125,7 +126,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   padding: const EdgeInsets.only(top: 16),
                   child: Text(
                     _errorMessage!,
-                    style: const TextStyle(color: Colors.red),
+                    style:
+                        TextStyle(color: AppSemanticColors.negative(context)),
                     textAlign: TextAlign.center,
                   ),
                 ),

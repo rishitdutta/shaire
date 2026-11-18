@@ -8,6 +8,7 @@ import '../widgets/friend_selection_widget.dart';
 import '../widgets/loading_spinner.dart';
 import '../widgets/add_friend_dialog.dart';
 import '../widgets/friend_quick_action_modal.dart';
+import '../theme/theme.dart';
 import 'friend_details_screen.dart';
 import 'group_details_screen.dart';
 
@@ -35,7 +36,9 @@ class _GroupsScreenState extends State<GroupsScreen>
     _tabController = TabController(length: 2, vsync: this);
     _tabController.index = 0;
     _searchController.addListener(_updateSearchQuery);
-    _tabController.addListener(_tabChanged);
+    // Rebuild only when the tab actually changes (the old code rebuilt on
+    // every animation frame of the swipe, janking the list at 60 fps).
+    _tabController.addListener(_onTabIndexChanged);
 
     // Fetch initial data using the providers
     // Use WidgetsBinding to ensure context is available
@@ -52,21 +55,23 @@ class _GroupsScreenState extends State<GroupsScreen>
     });
   }
 
-  void _tabChanged() {
-    // Only update if the tab is actually changing
-    setState(() {});
+  int _lastTabIndex = 0;
+
+  void _onTabIndexChanged() {
+    if (_tabController.index != _lastTabIndex) {
+      setState(() => _lastTabIndex = _tabController.index);
+    }
   }
 
   @override
   void dispose() {
-    _tabController.removeListener(_tabChanged);
+    _tabController.removeListener(_onTabIndexChanged);
     _tabController.dispose();
     _searchController.removeListener(_updateSearchQuery);
     _searchController.dispose();
     _addFriendController.dispose();
     _joinGroupController.dispose();
     _createGroupController.dispose();
-    _joinGroupController.dispose();
     super.dispose();
   }
 
@@ -114,10 +119,18 @@ class _GroupsScreenState extends State<GroupsScreen>
             padding: const EdgeInsets.all(16.0),
             child: TextField(
               controller: _searchController,
+              textInputAction: TextInputAction.search,
               decoration: InputDecoration(
                 hintText:
                     'Search ${_tabController.index == 0 ? "Friends" : "Groups"}...',
                 prefixIcon: const Icon(Icons.search),
+                suffixIcon: _searchQuery.isEmpty
+                    ? null
+                    : IconButton(
+                        icon: const Icon(Icons.close),
+                        tooltip: 'Clear search',
+                        onPressed: () => _searchController.clear(),
+                      ),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(30.0),
                   borderSide: BorderSide.none,
@@ -195,12 +208,20 @@ class _GroupsScreenState extends State<GroupsScreen>
     return Stack(
       children: [
         itemCount == 0 && _searchQuery.isEmpty && !friendProvider.isLoading
-            ? const Center(
-                child: Text(
-                    'No friends or requests yet.\nUse the + button to add friends.'))
+            ? _buildEmptyState(
+                icon: Icons.person_add_alt_1,
+                title: 'No friends yet',
+                message:
+                    'Add friends to split expenses one-on-one and keep balances straight.',
+                actionLabel: 'Add friend',
+                onAction: () => _showAddFriendDialog(friendProvider),
+              )
             : itemCount == 0 && _searchQuery.isNotEmpty
-                ? const Center(
-                    child: Text('No friends found matching your search.'))
+                ? _buildEmptyState(
+                    icon: Icons.search_off,
+                    title: 'No matches',
+                    message: 'No friends found matching “$_searchQuery”.',
+                  )
                 : ListView.builder(
                     padding: const EdgeInsets.only(bottom: 80),
                     itemCount: itemCount,
@@ -237,8 +258,9 @@ class _GroupsScreenState extends State<GroupsScreen>
                               children: [
                                 // Accept
                                 IconButton(
-                                  icon: const Icon(Icons.check,
-                                      color: Colors.green),
+                                  icon: Icon(Icons.check,
+                                      color:
+                                          AppSemanticColors.positive(context)),
                                   //tooltip: 'Accept',
                                   onPressed: () async {
                                     try {
@@ -267,8 +289,9 @@ class _GroupsScreenState extends State<GroupsScreen>
 
 // Reject
                                 IconButton(
-                                  icon: const Icon(Icons.close,
-                                      color: Colors.red),
+                                  icon: Icon(Icons.close,
+                                      color:
+                                          AppSemanticColors.negative(context)),
                                   //tooltip: 'Reject',
                                   onPressed: () async {
                                     //final messenger = ScaffoldMessenger.of(context);
@@ -306,14 +329,14 @@ class _GroupsScreenState extends State<GroupsScreen>
                         final friendId = item['id'].toString();
                         final isCustom = item['is_custom'] == true;
                         final isLinked = item['linked_user_id'] != null;
-                        final balance = friendProvider.friendBalances[friendId] ??
-                            {'youOwe': 0.0, 'youAreOwed': 0.0};
+                        final balance =
+                            friendProvider.friendBalances[friendId] ??
+                                {'youOwe': 0.0, 'youAreOwed': 0.0};
                         final youGet = balance['youAreOwed'] ?? 0.0;
                         final youOwe = balance['youOwe'] ?? 0.0;
                         final netBalance = youGet - youOwe;
-                        final displayName = item['full_name'] ??
-                            item['username'] ??
-                            'Unknown';
+                        final displayName =
+                            item['full_name'] ?? item['username'] ?? 'Unknown';
 
                         return Card(
                           margin: const EdgeInsets.symmetric(
@@ -363,16 +386,27 @@ class _GroupsScreenState extends State<GroupsScreen>
                             subtitle: (netBalance > 0
                                 ? Text(
                                     'You get ${currencyProvider.format(netBalance)}',
-                                    style: const TextStyle(
-                                        color: Colors.green),
+                                    style: TextStyle(
+                                        color:
+                                            AppSemanticColors.positive(context),
+                                        fontWeight: FontWeight.w600),
                                   )
                                 : netBalance < 0
                                     ? Text(
                                         'You owe ${currencyProvider.format(netBalance.abs())}',
-                                        style: const TextStyle(
-                                            color: Colors.red),
+                                        style: TextStyle(
+                                            color: AppSemanticColors.negative(
+                                                context),
+                                            fontWeight: FontWeight.w600),
                                       )
-                                    : const Text('Settled up')),
+                                    : Text(
+                                        'Settled up',
+                                        style: TextStyle(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .onSurfaceVariant,
+                                        ),
+                                      )),
                             onTap: () {
                               final targetId =
                                   item['linked_user_id'] ?? friendId;
@@ -444,12 +478,20 @@ class _GroupsScreenState extends State<GroupsScreen>
     return Stack(
       children: [
         itemCount == 0 && _searchQuery.isEmpty && !groupProvider.isLoading
-            ? const Center(
-                child: Text(
-                    'No groups found.\nUse the buttons to create or join.'))
+            ? _buildEmptyState(
+                icon: Icons.groups_2,
+                title: 'No groups yet',
+                message:
+                    'Create a group for trips, flatmates or projects, or join one your friends made.',
+                actionLabel: 'Create group',
+                onAction: () => _showCreateGroupDialog(groupProvider),
+              )
             : itemCount == 0 && _searchQuery.isNotEmpty
-                ? const Center(
-                    child: Text('No groups found matching your search.'))
+                ? _buildEmptyState(
+                    icon: Icons.search_off,
+                    title: 'No matches',
+                    message: 'No groups found matching “$_searchQuery”.',
+                  )
                 : ListView.builder(
                     padding: const EdgeInsets.only(bottom: 150),
                     itemCount: itemCount,
@@ -516,6 +558,58 @@ class _GroupsScreenState extends State<GroupsScreen>
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildEmptyState({
+    required IconData icon,
+    required String title,
+    required String message,
+    String? actionLabel,
+    VoidCallback? onAction,
+  }) {
+    final theme = Theme.of(context);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color:
+                    theme.colorScheme.primaryContainer.withValues(alpha: 0.6),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                icon,
+                size: 40,
+                color: theme.colorScheme.onPrimaryContainer,
+              ),
+            ),
+            const SizedBox(height: 20),
+            Text(title,
+                style: theme.textTheme.titleLarge
+                    ?.copyWith(fontWeight: FontWeight.w600)),
+            const SizedBox(height: 8),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodyMedium
+                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+            if (actionLabel != null && onAction != null) ...[
+              const SizedBox(height: 24),
+              OutlinedButton.icon(
+                onPressed: onAction,
+                icon: const Icon(Icons.add, size: 18),
+                label: Text(actionLabel),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 
